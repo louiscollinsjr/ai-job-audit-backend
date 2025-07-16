@@ -1,6 +1,7 @@
 const { chromium } = require('playwright');
 const OpenAI = require('openai');
 const { execSync } = require('child_process');
+const { supabase } = require('../utils/supabase'); // Import the supabase service client
 
 // Initialize OpenAI
 let openai;
@@ -306,7 +307,63 @@ module.exports = async function(req, res) {
     for (const cat of Object.values(categories)) {
       if (!Array.isArray(cat.suggestions)) cat.suggestions = [];
     }
+    
+    // Save to database - use service role key to bypass RLS
+    let reportId = null;
+    let userId = null;
+    
+    // Check if we have an auth header with a user token
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const token = authHeader.substring(7);
+        const { data: userData, error: authError } = await supabase.auth.getUser(token);
+        if (!authError && userData && userData.user) {
+          userId = userData.user.id;
+          console.log('Authenticated user ID:', userId);
+        }
+      } catch (authErr) {
+        console.error('Error checking auth token:', authErr);
+      }
+    }
+    
+    // Create database record
+    try {
+      const reportData = {
+        userid: userId || null, // Explicitly set to null for anonymous users
+        job_title,
+        job_body,
+        feedback,
+        total_score,
+        categories,
+        recommendations,
+        red_flags,
+        savedat: new Date().toISOString(),
+        source: 'api',
+        original_text: job_body,
+        original_report: JSON.stringify(jobData)
+      };
+      
+      console.log('Saving report to database with service role key...');
+      const { data: savedReport, error: reportError } = await supabase
+        .from('reports')
+        .insert([reportData])
+        .select('id')
+        .single();
+      
+      if (reportError) {
+        console.error('Error saving report to database:', reportError);
+      } else {
+        console.log('Report saved successfully with ID:', savedReport.id);
+        reportId = savedReport.id;
+      }
+    } catch (dbError) {
+      console.error('Exception saving report to database:', dbError);
+    }
+    
+    // Return response with ID if available
     const response = {
+      id: reportId, // Include the database ID
       total_score,
       categories,
       red_flags,

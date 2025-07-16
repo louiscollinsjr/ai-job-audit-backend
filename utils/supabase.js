@@ -1,13 +1,25 @@
 const { createClient } = require('@supabase/supabase-js');
 
 const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_ANON_KEY;
+// For server-side operations that need to bypass RLS, use service role key
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+// For client-like operations where RLS should apply
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
 
-if (!supabaseUrl || !supabaseKey) {
-  throw new Error('Supabase URL and Key must be set in environment variables');
+if (!supabaseUrl || !supabaseServiceKey) {
+  throw new Error('Supabase URL and Service Role Key must be set in environment variables');
 }
 
-const supabase = createClient(supabaseUrl, supabaseKey);
+// Create a client with the service role key for backend operations
+const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false
+  }
+});
+
+// Create a client with anon key for operations where RLS should apply
+const supabaseClient = createClient(supabaseUrl, supabaseAnonKey);
 
 /**
  * Get job data by ID from the database
@@ -75,5 +87,6 @@ async function getJobById(id) {
 
 module.exports = {
   supabase,
+  supabaseClient,
   getJobById
 };

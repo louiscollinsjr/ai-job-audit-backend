@@ -37,7 +37,7 @@ app.use(cors({
 app.post('/api/audit-job-post', auditJobPost);
 app.post('/api/audit-job-file', upload.single('file'), auditJobPost);
 app.use('/api/analyze-job', analyzeJob);
-app.use('/api/rewrite-job', rewriteJob);
+// Removed the duplicate route - now handled by rewriteRouter
 app.use('/api/generate-jsonld', generateJsonLd);
 app.get('/api/test', test);
 
@@ -45,7 +45,7 @@ app.get('/api/test', test);
 const auditRouter = require('./audit-router');
 const rewriteRouter = require('./rewrite-router');
 app.use('/api', auditRouter);
-app.use('/api', rewriteRouter);
+app.use('/api/v1', rewriteRouter);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
