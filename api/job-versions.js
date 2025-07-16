@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const supabase = require('../utils/supabase');
+const { supabase } = require('../utils/supabase');
 
 // GET all versions for a job
 router.get('/:id/versions', async (req, res) => {

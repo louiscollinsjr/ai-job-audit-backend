@@ -3,42 +3,70 @@ const { callLLM, extractJsonFromResponse } = require('../utils/llmHelpers');
 // Function to generate JSON-LD schema.org/JobPosting data
 async function generateJsonLd(jobText, analysisResult) {
   try {
-    const prompt = `
-      You are an expert in SEO and structured data. Convert the job posting below into a valid JSON-LD 
-      object following the schema.org/JobPosting format. Extract as much information as possible from
-      the job description, including:
-      
-      - Job title
-      - Company name
-      - Location
-      - Employment type
-      - Job description
-      - Required skills and qualifications
-      - Benefits and perks
-      - Salary range (if mentioned)
-      - Application instructions
-      - Any other relevant fields from schema.org/JobPosting
-      
-      Only include fields that can be confidently extracted from the text. Don't guess or make up information.
-      
-      Return a properly formatted JSON-LD object with appropriate @context and @type fields.
-      
-      Job posting to convert:
-      ${jobText}
-    `;
+    if (!jobText) {
+      throw new Error('Job text is required');
+    }
+
+    console.log('Generating JSON-LD for job with score:', analysisResult?.score || 'N/A');
+    
+    // Basic validation of analysis result
+    if (!analysisResult || typeof analysisResult !== 'object') {
+      analysisResult = { score: 0 };
+    }
+
+    // Prepare the prompt for the LLM
+    const prompt = `Convert this job posting into valid schema.org/JobPosting JSON-LD format:
+
+${jobText}
+
+Include these analysis results:
+Score: ${analysisResult.score || 0}
+Feedback: ${analysisResult.feedback || ''}`;
+
+    console.log('Calling LLM with prompt:', prompt.substring(0, 100) + '...');
     
     const response = await callLLM(prompt);
-    const jsonLd = extractJsonFromResponse(response);
     
-    // Ensure we have the basic required structure
-    if (!jsonLd || !jsonLd['@context'] || !jsonLd['@type']) {
-      throw new Error('Generated JSON-LD is invalid or incomplete');
+    // Extract JSON from the response
+    let json_ld = extractJsonFromResponse(response);
+    
+    // Basic validation
+    if (!json_ld || typeof json_ld !== 'object') {
+      throw new Error('Invalid JSON-LD generated');
     }
+
+    // Ensure required fields
+    json_ld['@context'] = 'https://schema.org';
+    json_ld['@type'] = 'JobPosting';
     
-    return jsonLd;
+    // Add jobPostScore if we have analysis results
+    if (analysisResult.score !== undefined) {
+      json_ld.jobPostScore = {
+        '@type': 'Rating',
+        ratingValue: analysisResult.score,
+        bestRating: 100,
+        worstRating: 0,
+        ratingExplanation: 'Job posting visibility and quality score'
+      };
+    }
+
+    console.log('Successfully generated JSON-LD:', json_ld);
+    return json_ld;
   } catch (error) {
     console.error('Error generating JSON-LD:', error);
-    throw new Error(`JSON-LD generation failed: ${error.message}`);
+    
+    // Return a minimal valid JSON-LD if generation fails
+    return {
+      '@context': 'https://schema.org',
+      '@type': 'JobPosting',
+      description: jobText.substring(0, 500),
+      jobPostScore: {
+        '@type': 'Rating',
+        ratingValue: analysisResult?.score || 0,
+        bestRating: 100,
+        worstRating: 0
+      }
+    };
   }
 }
 

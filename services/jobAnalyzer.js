@@ -3,12 +3,12 @@ const axios = require('axios');
 const playwright = require('playwright');
 const path = require('path');
 
-// Import the scoring functions from audit-job-post.js
-// NOTE: This requires audit-job-post.js to be refactored to export these functions
+// Import the scoring functions from savedat-job-post.js
+// NOTE: This requires savedat-job-post.js to be refactored to export these functions
 // For now, we'll reimplement similar logic directly in this file
 
-// Reuse functions from audit-job-post.js
-const scoreClarityReadability = async (jobText) => {
+// Reuse functions from savedat-job-post.js
+const scoreClarityReadability = async (job_body) => {
   const prompt = `
     You are an expert job posting auditor. Evaluate the job posting below for clarity and readability.
     Rate it on a scale from 1-100 where:
@@ -24,14 +24,14 @@ const scoreClarityReadability = async (jobText) => {
     }
     
     Job posting to evaluate:
-    ${jobText}
+    ${job_body}
   `;
   
   const response = await callLLM(prompt);
   return extractJsonFromResponse(response);
 };
 
-const scoreInclusivity = async (jobText) => {
+const scoreInclusivity = async (job_body) => {
   const prompt = `
     You are an expert job posting auditor. Evaluate the job posting below for inclusivity and bias.
     Rate it on a scale from 1-100 where:
@@ -47,14 +47,14 @@ const scoreInclusivity = async (jobText) => {
     }
     
     Job posting to evaluate:
-    ${jobText}
+    ${job_body}
   `;
   
   const response = await callLLM(prompt);
   return extractJsonFromResponse(response);
 };
 
-const scoreCompleteness = async (jobText) => {
+const scoreCompleteness = async (job_body) => {
   const prompt = `
     You are an expert job posting auditor. Evaluate the job posting below for completeness.
     Rate it on a scale from 1-100 where:
@@ -70,7 +70,7 @@ const scoreCompleteness = async (jobText) => {
     }
     
     Job posting to evaluate:
-    ${jobText}
+    ${job_body}
   `;
   
   const response = await callLLM(prompt);
@@ -87,7 +87,7 @@ async function extractTextFromUrl(url) {
     
     // Extract job posting content - this is a simplified example
     // You may need to adjust selectors based on the target sites
-    const jobText = await page.evaluate(() => {
+    const job_body = await page.evaluate(() => {
       // Look for common job posting containers
       const possibleSelectors = [
         '.job-description',
@@ -108,7 +108,7 @@ async function extractTextFromUrl(url) {
     });
     
     await browser.close();
-    return jobText;
+    return job_body;
   } catch (error) {
     console.error('Error extracting text from URL:', error);
     throw new Error(`Failed to extract job text from URL: ${error.message}`);
@@ -128,19 +128,19 @@ async function extractTextFromFile(fileData) {
 }
 
 // Main function to analyze job text
-async function analyzeJobText(jobText) {
+async function analyzeJobText(job_body) {
   try {
-    const jobTitle = "Job Posting"; // Default title if none provided
-    const jobData = { title: jobTitle, text: jobText };
+    const job_title = "Job Posting"; // Default title if none provided
+    const jobData = { job_title, job_body };
     
     // Run all scoring in parallel for efficiency - using 7-category model
     const [clarity, promptAlignment] = await Promise.all([
-      scoreClarityReadability(jobText),
-      scoreInclusivity(jobText)  // Using inclusivity as a stand-in for prompt alignment
+      scoreClarityReadability(job_body),
+      scoreInclusivity(job_body)  // Using inclusivity as a stand-in for prompt alignment
     ]);
     
     // Using completeness for structured data, recency, keyword targeting, compensation, and page context
-    const completenessResult = await scoreCompleteness(jobText);
+    const completenessResult = await scoreCompleteness(job_body);
     
     // Adapt to 7-category model with appropriate weights
     const clarityWeight = 0.2;       // 20 points
@@ -159,7 +159,7 @@ async function analyzeJobText(jobText) {
     const pageContext = { score: completenessResult.score, feedback: "Based on context and presentation" };
     
     // Calculate overall score (weighted)
-    const overallScore = Math.round(
+    const total_score = Math.round(
       (clarity.score * clarityWeight) + 
       (promptAlignment.score * promptAlignmentWeight) + 
       (structuredData.score * structuredDataWeight) +
@@ -180,7 +180,7 @@ async function analyzeJobText(jobText) {
       pageContext
     };
     
-    const redFlags = Object.entries(categories)
+    const red_flags = Object.entries(categories)
       .filter(([k, v]) => v.score < 50)
       .map(([k]) => k);
       
@@ -191,18 +191,18 @@ async function analyzeJobText(jobText) {
     ].filter(Boolean);
     
     return {
-      score: overallScore,
+      total_score,
       breakdown: {
         clarity: { score: clarity.score, feedback: clarity.feedback },
         inclusivity: { score: promptAlignment.score, feedback: promptAlignment.feedback },
         completeness: { score: completenessResult.score, feedback: completenessResult.feedback }
       },
       categories,
-      redFlags,
+      red_flags,
       recommendations,
-      jobTitle,
+      job_title,
       feedback: {
-        summary: `Overall Score: ${overallScore}/100`,
+        summary: `Overall Score: ${total_score}/100`,
         details: [
           `Clarity & Readability (${clarityWeight * 100}%): ${clarity.score}/100 - ${clarity.feedback}`,
           `Inclusivity/Prompt Alignment (${promptAlignmentWeight * 100}%): ${promptAlignment.score}/100 - ${promptAlignment.feedback}`,

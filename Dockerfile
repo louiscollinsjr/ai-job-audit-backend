@@ -41,7 +41,7 @@ RUN npm install
 RUN npm install openai@4.28.0 --save
 # Install Playwright browsers
 RUN npx playwright install chromium --with-deps
-RUN npx playwright install firefox
+# RUN npx playwright install firefox
 
 # Copy app source - copy all backend directories
 COPY . .

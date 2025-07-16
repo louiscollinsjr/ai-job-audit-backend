@@ -8,6 +8,7 @@ const port = process.env.PORT || 3000;
 const auditJobPost = require('./audit-job-post');
 const analyzeJob = require('./analyze-job');
 const rewriteJob = require('./rewrite-job');
+const generateJsonLd = require('./generate-jsonld');
 const test = require('./test');
 const jobVersionsRouter = require('./job-versions');
 
@@ -37,6 +38,7 @@ app.post('/api/audit-job-post', auditJobPost);
 app.post('/api/audit-job-file', upload.single('file'), auditJobPost);
 app.use('/api/analyze-job', analyzeJob);
 app.use('/api/rewrite-job', rewriteJob);
+app.use('/api/generate-jsonld', generateJsonLd);
 app.get('/api/test', test);
 
 // Mount routers

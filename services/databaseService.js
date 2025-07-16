@@ -1,4 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
+const { generateJsonLd } = require('./schemaGenerator');
 
 // Initialize Supabase client
 const supabaseUrl = process.env.SUPABASE_URL || '';
@@ -14,36 +15,70 @@ async function saveJobPosting(jobData) {
     }
     
     const { 
-      originalText, 
+      original_text, 
       visibilityScore, 
       feedback, 
-      jsonLd, 
+      json_ld: providedJsonLd, 
       userId, 
-      jobTitle = 'Job Posting',
-      redflags = [],
+      job_title = 'Job Posting',
+      red_flags = [],
       recommendations = [],
       improved_text = null,
       categories = {}
     } = jobData;
     
-    console.log('Saving job posting to reports table');
+    // Generate JSON-LD if not provided
+    let json_ld = providedJsonLd;
+    if (!json_ld) {
+      try {
+        console.log('Generating JSON-LD for:', job_title);
+        
+        // Prepare complete analysis data
+        const analysisData = {
+          score: visibilityScore,
+          feedback: feedback,
+          categories: categories,
+          recommendations: recommendations,
+          red_flags: red_flags,
+          job_title: job_title
+        };
+        
+        json_ld = await generateJsonLd(original_text, analysisData);
+        
+        if (!json_ld) {
+          throw new Error('JSON-LD generation returned null');
+        }
+        
+        console.log('JSON-LD generated successfully');
+      } catch (err) {
+        console.error('JSON-LD generation failed:', err);
+        // Create minimal valid JSON-LD as fallback
+        json_ld = {
+          '@context': 'https://schema.org',
+          '@type': 'JobPosting',
+          description: original_text.substring(0, 500),
+          title: job_title
+        };
+      }
+    }
+
+    console.log('Saving job posting with JSON-LD:', json_ld ? 'exists' : 'null');
     
     // Insert job data into the reports table
     const { data, error } = await supabase
       .from('reports')
       .insert({
-        userid: userId || '14e7afdf-429f-499d-86ff-37dde8b92b53',
-        jobtitle: jobTitle,
-        jobbody: originalText,
-        original_text: originalText,
+        userid: userId,
+        job_title: job_title,
+        job_body: original_text,
+        original_text: original_text,
         feedback: feedback,
-        totalscore: visibilityScore,
+        total_score: visibilityScore,
         categories: categories,
-        json_ld: jsonLd,
-        improved_text: improved_text,
+        json_ld: json_ld,
         recommendations: recommendations,
-        redflags: redflags,
-        originalreport: { text: originalText },
+        red_flags: red_flags,
+        original_report: original_text,
         savedat: new Date().toISOString()
       })
       .select('*')
@@ -58,17 +93,16 @@ async function saveJobPosting(jobData) {
     
     return {
       id: data.id,
-      jobtitle: data.jobtitle,
-      jobbody: data.jobbody,
+      job_title: data.job_title,
+      job_body: data.job_body,
       original_text: data.original_text,
       feedback: data.feedback,
-      totalscore: data.totalscore,
+      total_score: data.total_score,
       categories: data.categories,
       json_ld: data.json_ld,
-      improved_text: data.improved_text,
       recommendations: data.recommendations,
-      redflags: data.redflags,
-      originalreport: data.originalreport,
+      red_flags: data.red_flags,
+      original_report: data.original_report,
       savedat: data.savedat
     }
   } catch (error) {
@@ -95,17 +129,16 @@ async function getJobPostingById(id) {
     
     return {
       id: data.id,
-      jobtitle: data.jobtitle,
-      jobbody: data.jobbody,
+      job_title: data.job_title,
+      job_body: data.job_body,
       original_text: data.original_text,
       feedback: data.feedback,
-      totalscore: data.totalscore,
+      total_score: data.total_score,
       categories: data.categories,
       json_ld: data.json_ld,
-      improved_text: data.improved_text,
       recommendations: data.recommendations,
-      redflags: data.redflags,
-      originalreport: data.originalreport,
+      red_flags: data.red_flags,
+      original_report: data.original_report,
       savedat: data.savedat
     };
   } catch (error) {

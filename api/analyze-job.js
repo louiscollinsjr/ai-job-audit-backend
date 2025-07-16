@@ -62,9 +62,9 @@ router.post('/', async (req, res) => {
     }
     
     // 4. Generate JSON-LD
-    let jsonLd;
+    let json_ld;
     try {
-      jsonLd = await generateJsonLd(jobText, analysisResult);
+      json_ld = await generateJsonLd(jobText, analysisResult);
     } catch (error) {
       console.error('Error generating JSON-LD:', error);
       return res.status(500).json({ error: 'Failed to generate JSON-LD', details: error.message });
@@ -74,12 +74,12 @@ router.post('/', async (req, res) => {
     let storedJob;
     try {
       storedJob = await saveJobPosting({
-        originalText: jobText,
-        visibilityScore: analysisResult.score,
+        original_text: jobText,
+        total_score: analysisResult.score,
         feedback: analysisResult.feedback,
-        jsonLd: jsonLd,
-        jobTitle: analysisResult.jobTitle || 'Job Posting',
-        redflags: analysisResult.redFlags || [],
+        json_ld: json_ld,
+        job_title: analysisResult.job_title || 'Job Posting',
+        red_flags: analysisResult.red_flags || [],
         recommendations: analysisResult.recommendations || [],
         categories: analysisResult.categories || {},
         improved_text: improvedText
@@ -92,16 +92,16 @@ router.post('/', async (req, res) => {
     // 6. Return complete data in single response
     res.json({
       id: storedJob.id,
-      originalText: jobText,
-      visibilityScore: analysisResult.score,
+      original_text: jobText,
+      total_score: analysisResult.score,
       breakdown: analysisResult.breakdown,
       feedback: analysisResult.feedback,
-      jsonLd: jsonLd,
+      json_ld: json_ld,
       improved_text: storedJob.improved_text,
       recommendations: analysisResult.recommendations || [],
-      redflags: analysisResult.redFlags || [],
-      originalreport: { text: jobText },
-      createdAt: storedJob.savedat
+      red_flags: analysisResult.red_flags || [],
+      original_report: { text: jobText },
+      created_at: storedJob.savedat
     });
   } catch (error) {
     console.error('Error in analyze-job endpoint:', error);

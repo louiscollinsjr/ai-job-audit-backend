@@ -42,14 +42,14 @@ async function callLLM(prompt, temperature = 0.2) {
 }
 
 // 1. Clarity & Readability (20 pts)
-async function scoreClarityReadability({ title, text }) {
+async function scoreClarityReadability({ job_title, job_body }) {
   // Deterministic: avg sentence length
-  const sentences = text.match(/[^.!?]+[.!?]+/g) || [];
-  const avgLen = sentences.length ? text.length / sentences.length : text.length;
+  const sentences = job_body.match(/[^.!?]+[.!?]+/g) || [];
+  const avgLen = sentences.length ? job_body.length / sentences.length : job_body.length;
   let sentenceScore = avgLen < 22 ? 7 : avgLen < 28 ? 4 : 1;
 
   // LLM: title clarity, fluff
-  const prompt = `Assess the following job posting for (a) title clarity, (b) fluff/buzzwords, (c) overall readability. Give each a score 0-10 and a suggestion if <8. Respond as JSON: {"title": {"score": n, "suggestion": "..."}, "fluff": {"score": n, "suggestion": "..."}, "readability": {"score": n, "suggestion": "..."}}\nJob Title: ${title}\nJob Body: ${text}`;
+  const prompt = `Assess the following job posting for (a) title clarity, (b) fluff/buzzwords, (c) overall readability. Give each a score 0-10 and a suggestion if <8. Respond as JSON: {"title": {"score": n, "suggestion": "..."}, "fluff": {"score": n, "suggestion": "..."}, "readability": {"score": n, "suggestion": "..."}}\nJob Title: ${job_title}\nJob Body: ${job_body}`;
   let llm;
   try { llm = JSON.parse(await callLLM(prompt)); } catch { llm = {title:{score:5},fluff:{score:5},readability:{score:5}}; }
   const total = Math.round((llm.title.score + llm.fluff.score + llm.readability.score + sentenceScore) / 4 * 2);
@@ -61,8 +61,8 @@ async function scoreClarityReadability({ title, text }) {
 }
 
 // 2. Prompt Alignment (20 pts)
-async function scorePromptAlignment({ title, text }) {
-  const prompt = `Evaluate if this job posting matches how a user would phrase a search (prompt alignment), logical grouping of skills/role/location, and natural query structure. Score each 0-10, suggestion if <8. Respond as JSON: {"query_match":{"score":n,"suggestion":"..."},"grouping":{"score":n,"suggestion":"..."},"structure":{"score":n,"suggestion":"..."}}\nJob Title: ${title}\nJob Body: ${text}`;
+async function scorePromptAlignment({ job_title, job_body }) {
+  const prompt = `Evaluate if this job posting matches how a user would phrase a search (prompt alignment), logical grouping of skills/role/location, and natural query structure. Score each 0-10, suggestion if <8. Respond as JSON: {"query_match":{"score":n,"suggestion":"..."},"grouping":{"score":n,"suggestion":"..."},"structure":{"score":n,"suggestion":"..."}}\nJob Title: ${job_title}\nJob Body: ${job_body}`;
   let llm;
   try { llm = JSON.parse(await callLLM(prompt)); } catch { llm = {query_match:{score:5},grouping:{score:5},structure:{score:5}}; }
   const total = Math.round((llm.query_match.score + llm.grouping.score + llm.structure.score) / 3 * 2);
@@ -74,13 +74,13 @@ async function scorePromptAlignment({ title, text }) {
 }
 
 // 3. Structured Data Presence (15 pts)
-function scoreStructuredDataPresence({ html }) {
+function scoreStructuredDataPresence({ job_html }) {
   let score = 0, suggestions = [];
   try {
-    const schemaMatch = html && html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/);
+    const schemaMatch = job_html && job_html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/);
     if (!schemaMatch) { suggestions.push('No schema.org/JobPosting JSON-LD found.'); return {score, maxScore:15, breakdown:{}, suggestions}; }
     const json = JSON.parse(schemaMatch[1]);
-    const required = ['jobTitle','datePosted','description','hiringOrganization','jobLocation'];
+    const required = ['job_title','datePosted','description','hiringOrganization','jobLocation'];
     let found = 0;
     required.forEach(k=>{ if(json[k]) found++; else suggestions.push(`Missing schema property: ${k}`); });
     score = Math.round((found/required.length)*15);
@@ -90,15 +90,15 @@ function scoreStructuredDataPresence({ html }) {
 }
 
 // 4. Recency & Freshness (10 pts)
-function scoreRecencyFreshness({ html, text }) {
+function scoreRecencyFreshness({ job_html, job_body }) {
   let score = 0, suggestions = [];
   let date = null;
   try {
-    const match = html && html.match(/"datePosted"\s*:\s*"([0-9T:-]+)"/);
+    const match = job_html && job_html.match(/"datePosted"\s*:\s*"([0-9T:-]+)"/);
     if (match) date = new Date(match[1]);
   } catch {}
   if (!date) {
-    const textMatch = text.match(/(\d{4}-\d{2}-\d{2})/);
+    const textMatch = job_body.match(/(\d{4}-\d{2}-\d{2})/);
     if (textMatch) date = new Date(textMatch[1]);
   }
   if (date) {
@@ -110,19 +110,19 @@ function scoreRecencyFreshness({ html, text }) {
     suggestions.push('No posting date found.');
     score = 3;
   }
-  if (/(hiring\s*now|immediate|start\s*ASAP|\b2025\b|\bJune\b)/i.test(text)) score += 1;
-  return { score: Math.min(score,10), maxScore:10, breakdown:{date}, suggestions };
+  if (/(hiring\s*now|immediate|start\s*ASAP|\b2025\b|\bJune\b)/i.test(job_body)) score += 1;
+  return { score: Math.min(score,10), maxScore: 10, breakdown: { date }, suggestions };
 }
 
 // 5. Keyword Targeting (15 pts)
-function scoreKeywordTargeting({ title, text }) {
+function scoreKeywordTargeting({ job_title, job_body }) {
   let score = 0, suggestions = [];
   // Simple deterministic: check for role, level, location, skills, modality
-  const role = /(engineer|developer|designer|manager|analyst|lead|director|scientist)/i.test(title+text);
-  const level = /(senior|junior|lead|principal|entry|mid|staff)/i.test(title+text);
-  const location = /(remote|hybrid|onsite|[A-Z][a-z]+,?\s?[A-Z]{2})/i.test(title+text);
-  const skills = /(python|javascript|react|sql|aws|typescript|java|node|cloud|ml|ai)/i.test(title+text);
-  const modality = /(full[-\s]?time|part[-\s]?time|contract|internship|permanent)/i.test(title+text);
+  const role = /(engineer|developer|designer|manager|analyst|lead|director|scientist)/i.test(job_title+job_body);
+  const level = /(senior|junior|lead|principal|entry|mid|staff)/i.test(job_title+job_body);
+  const location = /(remote|hybrid|onsite|[A-Z][a-z]+,?\s?[A-Z]{2})/i.test(job_title+job_body);
+  const skills = /(python|javascript|react|sql|aws|typescript|java|node|cloud|ml|ai)/i.test(job_title+job_body);
+  const modality = /(full[-\s]?time|part[-\s]?time|contract|internship|permanent)/i.test(job_title+job_body);
   if (role) score += 3; else suggestions.push('No clear role keyword.');
   if (level) score += 3; else suggestions.push('No level keyword.');
   if (location) score += 3; else suggestions.push('No location keyword.');
@@ -132,37 +132,31 @@ function scoreKeywordTargeting({ title, text }) {
 }
 
 // 6. Compensation Transparency (10 pts)
-function scoreCompensationTransparency({ text }) {
+function scoreCompensationTransparency({ job_body }) {
   let score = 0, suggestions = [];
-  if (/\$\d{2,3}[,\d]*\b/.test(text)) score = 10;
-  else if (/(competitive|market rate|DOE|negotiable|commensurate)/i.test(text)) { score = 6; suggestions.push('Vague compensation term. Specify a range.'); }
+  if (/\$\d{2,3}[,\d]*\b/.test(job_body)) score = 10;
+  else if (/(competitive|market rate|DOE|negotiable|commensurate)/i.test(job_body)) { score = 6; suggestions.push('Vague compensation term. Specify a range.'); }
   else suggestions.push('No compensation info found.');
   return { score, maxScore: 10, breakdown: {}, suggestions };
 }
 
 // 7. Page Context & Cleanliness (10 pts)
-function scorePageContextCleanliness({ html, text }) {
+function scorePageContextCleanliness({ job_html, job_body }) {
   let score = 0, suggestions = [];
   // Heuristic: text-to-html ratio, header/list count
-  const textLen = text.length;
-  const htmlLen = html ? html.length : textLen;
+  const textLen = job_body.length;
+  const htmlLen = job_html ? job_html.length : textLen;
   const ratio = textLen/htmlLen;
   if (ratio > 0.35) score += 4;
   else suggestions.push('Page may have excessive HTML/clutter.');
-  const headers = (html && html.match(/<h[1-6][^>]*>/g) || []).length;
-  const lists = (html && html.match(/<li[^>]*>/g) || []).length;
+  const headers = (job_html && job_html.match(/<h[1-6][^>]*>/g) || []).length;
+  const lists = (job_html && job_html.match(/<li[^>]*>/g) || []).length;
   if (headers > 1) score += 3; else suggestions.push('Add more headers for readability.');
   if (lists > 2) score += 3; else suggestions.push('Add more bullet points/lists.');
   return { score: Math.min(score,10), maxScore: 10, breakdown: { ratio, headers, lists }, suggestions };
 }
 
 // --- END 7-Category, 100-Point Rubric Implementation ---
-
-
-
-
-
-
 
 
 // Express handler
@@ -194,9 +188,9 @@ module.exports = async function(req, res) {
     });
   }
 
-  let jobTitle = null;
-  let jobBody = null;
-  let jobHtml = null;
+  let job_title = null;
+  let job_body = null;
+  let job_html = null;
 
   if (url) {
     try {
@@ -240,18 +234,18 @@ module.exports = async function(req, res) {
         console.log('Navigation complete');
         
         console.log('Getting page title - START');
-        jobTitle = await page.title();
-        console.log(`Page title: ${jobTitle}`);
+        job_title = await page.title();
+        console.log(`Page title: ${job_title}`);
         
         console.log('Extracting page content - START');
-        jobBody = await page.evaluate(() => {
+        job_body = await page.evaluate(() => {
           const main = document.querySelector('main') || document.body;
           return main.innerText;
         });
-        console.log(`Extracted content length: ${jobBody.length} characters`);
+        console.log(`Extracted content length: ${job_body.length} characters`);
         
         console.log('Getting page HTML - START');
-        jobHtml = await page.content();
+        job_html = await page.content();
         console.log('Page HTML extracted successfully');
         
         console.log('Closing browser - START');
@@ -268,8 +262,8 @@ module.exports = async function(req, res) {
   } else if (text) {
     try {
       console.log('Starting text analysis');
-      jobBody = text;
-      jobTitle = "Job Posting Text Analysis";
+      job_body = text;
+      job_title = "Job Posting Text Analysis";
       
       console.log('Text analysis completed');
     } catch (error) {
@@ -280,7 +274,7 @@ module.exports = async function(req, res) {
 
   // --- 7-Category Audit ---
   try {
-    const jobData = { title: jobTitle, text: jobBody, html: jobHtml };
+    const jobData = { job_title, job_body, job_html };
     const [clarity, promptAlignment] = await Promise.all([
       scoreClarityReadability(jobData),
       scorePromptAlignment(jobData)
@@ -290,7 +284,7 @@ module.exports = async function(req, res) {
     const keywordTargeting = scoreKeywordTargeting(jobData);
     const compensation = scoreCompensationTransparency(jobData);
     const pageContext = scorePageContextCleanliness(jobData);
-    const totalScore =
+    const total_score =
       clarity.score + promptAlignment.score + structuredData.score +
       recency.score + keywordTargeting.score + compensation.score + pageContext.score;
     const categories = {
@@ -302,24 +296,26 @@ module.exports = async function(req, res) {
       compensation,
       pageContext
     };
-    const redFlags = Object.entries(categories)
+    const red_flags = Object.entries(categories)
       .filter(([k, v]) => v.score < v.maxScore * 0.5)
       .map(([k]) => k);
     const recommendations = Object.values(categories).flatMap(c => c.suggestions).filter(Boolean);
     // Compose a feedback string for the frontend (simple summary)
-    const feedback = `This job posting scored ${totalScore}/100. Key areas for improvement: ${recommendations.length ? recommendations.join('; ') : 'none'}.`;
+    const feedback = `This job posting scored ${total_score}/100. Key areas for improvement: ${recommendations.length ? recommendations.join('; ') : 'none'}.`;
     // Ensure all categories have a suggestions array
     for (const cat of Object.values(categories)) {
       if (!Array.isArray(cat.suggestions)) cat.suggestions = [];
     }
     const response = {
-      totalScore,
+      total_score,
       categories,
-      redFlags,
+      red_flags,
       recommendations,
-      jobTitle,
-      jobBody,
-      feedback
+      job_title,
+      job_body,
+      feedback,
+      saved_at: new Date().toISOString(),
+      original_report: {}
     };
     res.json(response);
   } catch (error) {

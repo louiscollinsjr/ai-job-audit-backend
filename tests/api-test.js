@@ -121,7 +121,7 @@ async function testRewriteJob(jobId) {
  * Validate analyze-job response structure
  */
 function validateAnalyzeResponse(data) {
-  const requiredFields = ['id', 'originalText', 'visibilityScore', 'feedback', 'jsonLd'];
+  const requiredFields = ['id', 'original_text', 'visibilityScore', 'feedback', 'json_ld'];
   
   for (const field of requiredFields) {
     if (!data[field]) {
@@ -137,24 +137,24 @@ function validateAnalyzeResponse(data) {
   }
   
   // Validate JSON-LD structure
-  if (typeof data.jsonLd !== 'object' || 
-      !data.jsonLd['@context'] || 
-      !data.jsonLd['@type'] || 
-      data.jsonLd['@type'] !== 'JobPosting') {
+  if (typeof data.json_ld !== 'object' || 
+      !data.json_ld['@context'] || 
+      !data.json_ld['@type'] || 
+      data.json_ld['@type'] !== 'JobPosting') {
     throw new Error('Invalid JSON-LD structure');
   }
   
   log('Response validation PASSED', SUCCESS_COLOR);
   log(`Job ID: ${data.id}`, INFO_COLOR);
   log(`Visibility Score: ${data.visibilityScore}`, INFO_COLOR);
-  log(`JSON-LD type: ${data.jsonLd['@type']}`, INFO_COLOR);
+  log(`JSON-LD type: ${data.json_ld['@type']}`, INFO_COLOR);
 }
 
 /**
  * Validate rewrite-job response structure
  */
 function validateRewriteResponse(data) {
-  const requiredFields = ['id', 'originalText', 'improvedText', 'visibilityScore'];
+  const requiredFields = ['id', 'original_text', 'improvedText', 'visibilityScore'];
   
   for (const field of requiredFields) {
     if (!data[field]) {
@@ -163,13 +163,13 @@ function validateRewriteResponse(data) {
   }
   
   // Text should be different
-  if (data.originalText === data.improvedText) {
+  if (data.original_text === data.improvedText) {
     throw new Error('Improved text is identical to original text');
   }
   
   log('Response validation PASSED', SUCCESS_COLOR);
   log(`Job ID: ${data.id}`, INFO_COLOR);
-  log(`Original text length: ${data.originalText.length} chars`, INFO_COLOR);
+  log(`Original text length: ${data.original_text.length} chars`, INFO_COLOR);
   log(`Improved text length: ${data.improvedText.length} chars`, INFO_COLOR);
 }
 

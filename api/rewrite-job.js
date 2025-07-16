@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { callLLM } = require('../utils/llmHelpers');
 const { getJobPostingById, updateJobPosting } = require('../services/databaseService');
-const supabase = require('../utils/supabase'); // Assuming supabase is initialized here
+const { supabase } = require('../utils/supabase'); // Assuming supabase is initialized here
 
 /**
  * POST /api/rewrite-job/:id
@@ -72,7 +72,7 @@ router.post('/:id', async (req, res) => {
     }
     
     res.json({
-      originalText: job.original_text,
+      original_text: job.original_text,
       improvedText,
       recommendations,
       score: job.totalscore
