@@ -56,20 +56,22 @@ router.get('/:id', async (req, res) => {
  */
 router.post('/:id', async (req, res) => {
   try {
+    console.log('Entering rewrite-job handler');
     const { id } = req.params;
-    const { saveToDatabase = true } = req.body; // Default to saving
+    const { saveToDatabase = true } = req.body;
     
-    // 1. Fetch job from database
+    // Fetch job from database
     const job = await getJobPostingById(id);
     if (!job) {
+      console.log('Job not found');
       return res.status(404).json({ error: 'Job posting not found' });
     }
     
-    // Log complete job structure for debugging
-    console.log('Job data structure:', JSON.stringify(job, null, 2));
+    console.log('Job data:', JSON.stringify(job, null, 2));
     
     // Validate required fields
     if (!job.original_text) {
+      console.log('Missing original text');
       return res.status(400).json({ 
         error: 'Invalid job data', 
         details: 'Job is missing original text'
@@ -112,16 +114,18 @@ router.post('/:id', async (req, res) => {
       await updateJobPosting(id, { improved_text: improvedText });
     }
     
-    res.json({
+    console.log('Handler completed successfully');
+    return res.json({
       original_text: job.original_text,
       improvedText,
       recommendations,
       score: job.totalscore
     });
+    
   } catch (error) {
-    console.error('Error in rewrite-job endpoint:', error);
-    res.status(500).json({ 
-      error: 'An unexpected error occurred', 
+    console.error('Error in rewrite-job handler:', error);
+    return res.status(500).json({ 
+      error: 'Internal server error',
       details: error.message 
     });
   }

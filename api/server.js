@@ -43,9 +43,27 @@ app.get('/api/test', test);
 
 // Mount routers
 const auditRouter = require('./audit-router');
-const rewriteRouter = require('./rewrite-router');
-app.use('/api', auditRouter);
-app.use('/api/v1', rewriteRouter);
+const rewriteRouter = require('./rewrite-job');
+const reportsRouter = require('./reports-router');
+app.use('/api/v1', auditRouter);
+app.use('/api/v1', reportsRouter); // Mount reports router at /api/v1 path
+app.use('/api/v1/rewrite-job', rewriteRouter);
+
+// Debug all registered routes
+const routes = [];
+app._router.stack.forEach((middleware) => {
+  if (middleware.route) {
+    routes.push(`${Object.keys(middleware.route.methods).join(', ')} -> ${middleware.route.path}`);
+  } else if (middleware.name === 'router') {
+    middleware.handle.stack.forEach((handler) => {
+      if (handler.route) {
+        routes.push(`${Object.keys(handler.route.methods).join(', ')} -> ${middleware.regexp.source}${handler.route.path}`);
+      }
+    });
+  }
+});
+
+console.log('Registered routes:', routes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
