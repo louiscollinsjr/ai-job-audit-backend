@@ -1,10 +1,11 @@
+const express = require('express');
+const router = express.Router();
+const { supabase } = require('../utils/supabase');
+
 /**
  * Handler to fetch reports for the authenticated user
  */
-// Import the Supabase client from the existing utils
-const { supabase } = require('../utils/supabase');
-
-const fetchUserReports = async (req, res) => {
+router.get('/', async (req, res) => {
   try {
     console.log('Fetching reports for authenticated user');
     
@@ -59,7 +60,75 @@ const fetchUserReports = async (req, res) => {
     console.error('Error fetching user reports:', error);
     return res.status(500).json({ error: 'Failed to fetch reports' });
   }
-};
+});
+
+/**
+ * Handler to fetch a single report by ID for the authenticated user
+ */
+router.get('/:id', async (req, res) => {
+  try {
+    const reportId = req.params.id;
+    console.log(`Fetching report ${reportId} for authenticated user`);
+
+    // Get the auth token from headers
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const token = authHeader.split(' ')[1];
+    
+    try {
+      // Decode JWT to get user ID
+      const tokenPayload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+      const userId = tokenPayload.sub;
+
+      if (!userId) {
+        return res.status(401).json({ error: 'Invalid authentication token' });
+      }
+
+      console.log(`Fetching report ${reportId} for user ID: ${userId}`);
+
+      // Query the Supabase database for the report by ID and user ID
+      const { data: report, error } = await supabase
+        .from('reports')
+        .select('*')
+        .eq('id', reportId)
+        .eq('userid', userId)
+        .single();
+
+      if (error) {
+        console.error('Error fetching report from Supabase:', error);
+        return res.status(500).json({ error: 'Database error when fetching report' });
+      }
+
+      if (!report) {
+        return res.status(404).json({ error: 'Report not found' });
+      }
+
+      // Format the report similarly to how we format in the list
+      const formattedReport = {
+        id: report.id,
+        title: report.job_title || 'Untitled Job Post',
+        company: report.company_name || 'Unknown Company',
+        date: report.savedat ? new Date(report.savedat).toISOString().split('T')[0] : '',
+        score: report.total_score || calculateOverallScore(report),
+        status: 'Saved',
+        // We might need to return the full report data? The frontend might expect more.
+        // The rewrite page expects the full report with job_body and categories?
+        ...report
+      };
+
+      return res.status(200).json(formattedReport);
+    } catch (dbError) {
+      console.error('Database error when fetching report:', dbError);
+      return res.status(500).json({ error: 'Error fetching report from database' });
+    }
+  } catch (error) {
+    console.error('Error fetching report:', error);
+    return res.status(500).json({ error: 'Failed to fetch report' });
+  }
+});
 
 /**
  * Helper function to calculate overall score from report data
@@ -79,4 +148,4 @@ function calculateOverallScore(report) {
   return 0; // Default score if no data available
 }
 
-module.exports = fetchUserReports;
+module.exports = router;

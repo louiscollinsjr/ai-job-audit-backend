@@ -48,6 +48,7 @@ const reportsRouter = require('./reports-router');
 app.use('/api/v1', auditRouter);
 app.use('/api/v1', reportsRouter); // Mount reports router at /api/v1 path
 app.use('/api/v1/rewrite-job', rewriteRouter);
+app.use('/api/v1/job', jobVersionsRouter);
 
 // Debug all registered routes
 const routes = [];
