@@ -11,22 +11,65 @@ const openai = new OpenAI({
  * @param {number} temperature - Temperature parameter (0-1)
  * @returns {string} - The generated text response
  */
-async function callLLM(prompt, temperature = 0.2) {
-  try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4.1-2025-04-14",
-      messages: [
-        { role: "system", content: "You are an expert in job posting analysis and improvement." },
-        { role: "user", content: prompt }
-      ],
-      temperature: temperature,
-    });
+async function callLLM(prompt, temperature = 0.2, options = {}) {
+  const {
+    model = process.env.OPENAI_CHAT_MODEL || 'gpt-5-mini',
+    top_p = 1,
+    user = 'utils/llmHelpers',
+    response_format,
+    systemMessage = 'You are an expert in job posting analysis and improvement.',
+    seed
+  } = options || {};
 
-    return response.choices[0].message.content;
-  } catch (error) {
-    console.error('Error calling OpenAI:', error);
-    throw new Error(`OpenAI API error: ${error.message}`);
+  const params = {
+    model,
+    messages: [
+      { role: 'system', content: systemMessage },
+      { role: 'user', content: prompt }
+    ],
+    temperature,
+    top_p,
+    user
+  };
+  if (response_format) params.response_format = response_format;
+  if (typeof seed === 'number') params.seed = seed;
+
+  const maxAttempts = 3;
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await openai.chat.completions.create(params, { timeout: 20000 });
+      return response.choices[0].message.content;
+    } catch (error) {
+      lastError = error;
+      const status = (error && error.status) || (error && error.code) || 0;
+      const message = String((error && error.message) || '');
+
+      // If model doesn't support custom temperature (only default=1), retry once without temperature
+      const tempUnsupported = /Unsupported value: 'temperature'|Only the default \(1\) value is supported/i.test(message);
+      if (tempUnsupported && params && Object.prototype.hasOwnProperty.call(params, 'temperature')) {
+        try {
+          console.warn('LLM rejected custom temperature; retrying without temperature.');
+          const { temperature: _omit, ...safeParams } = params;
+          const response = await openai.chat.completions.create(safeParams, { timeout: 20000 });
+          return response.choices[0].message.content;
+        } catch (e2) {
+          lastError = e2;
+          // fall through to normal retry logic below
+        }
+      }
+
+      const retryable = status === 429 || (typeof status === 'number' && status >= 500) || /timeout/i.test(String(error && error.message));
+      if (attempt < maxAttempts && retryable) {
+        const backoffMs = 300 * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 100);
+        console.warn(`LLM call failed (attempt ${attempt}/${maxAttempts}). Retrying in ${backoffMs}ms...`, error?.message || error);
+        await new Promise(r => setTimeout(r, backoffMs));
+        continue;
+      }
+      throw new Error(`OpenAI API error: ${error.message}`);
+    }
   }
+  throw lastError;
 }
 
 /**

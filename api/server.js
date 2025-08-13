@@ -37,7 +37,7 @@ app.use(cors({
 app.post('/api/audit-job-post', auditJobPost);
 app.post('/api/audit-job-file', upload.single('file'), auditJobPost);
 app.use('/api/analyze-job', analyzeJob);
-// Removed the duplicate route - now handled by rewriteRouter
+// JSON-LD generator routes (keep unversioned for backward compat; also mount under v1)
 app.use('/api/generate-jsonld', generateJsonLd);
 app.get('/api/test', test);
 
@@ -48,6 +48,7 @@ const reportsRouter = require('./reports-router');
 app.use('/api/v1', auditRouter);
 app.use('/api/v1', reportsRouter); // Mount reports router at /api/v1 path
 app.use('/api/v1/rewrite-job', rewriteRouter);
+app.use('/api/v1/generate-jsonld', generateJsonLd);
 app.use('/api/v1/job', jobVersionsRouter);
 
 // Debug all registered routes

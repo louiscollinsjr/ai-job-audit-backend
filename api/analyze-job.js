@@ -53,8 +53,22 @@ router.post('/', async (req, res) => {
     
     // 3. Generate improved text using feedback
     let improvedText;
+    // try {
+    //   const prompt = `Improve this job posting based on these recommendations:\n\nOriginal: ${jobText}\n\nRecommendations: ${analysisResult.recommendations.join('\n')}`;
+    //   improvedText = await callLLM(prompt);
+    // } catch (error) {
+    //   console.error('Error improving job text:', error);
+    //   improvedText = ''; // Continue even if improvement fails
+    // }
+    
     try {
-      const prompt = `Improve this job posting based on these recommendations:\n\nOriginal: ${jobText}\n\nRecommendations: ${analysisResult.recommendations.join('\n')}`;
+      const prompt = 
+        `You are to output only the improved job posting text with no commentary, preamble, or explanation.\n\n` +
+        `Improve this job posting based on the following recommendations.\n\n` +
+        `Original:\n${jobText}\n\n` +
+        `Recommendations:\n${analysisResult.recommendations.join('\n')}\n\n` +
+        `Improved Version (output only the rewritten posting, nothing else):`;
+      
       improvedText = await callLLM(prompt);
     } catch (error) {
       console.error('Error improving job text:', error);

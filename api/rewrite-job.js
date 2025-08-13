@@ -89,10 +89,16 @@ router.post('/:id', async (req, res) => {
     }
     
     // Create improvement prompt
-    const prompt = `Rewrite this job posting to address these specific issues:\n\n` +
-      `Original Posting: ${job.original_text}\n\n` +
-      `Areas Needing Improvement:\n${recommendations.join('\n')}\n\n` +
-      `Improved Version:`;
+    // const prompt = `Rewrite this job posting to address these specific issues:\n\n` +
+    //   `Original Posting: ${job.original_text}\n\n` +
+    //   `Areas Needing Improvement:\n${recommendations.join('\n')}\n\n` +
+    //   `Improved Version:`;
+    
+    const prompt = `You are to output only the improved job posting text with no extra commentary, preamble, or explanation.\n\n` +
+    `Rewrite this job posting to address the following issues.\n\n` +
+    `Original Posting:\n${job.original_text}\n\n` +
+    `Areas Needing Improvement:\n${recommendations.join('\n')}\n\n` +
+    `Improved Version (output only the rewritten posting, nothing else):`;
     
     // Generate improved text
     const improvedText = await callLLM(prompt);
