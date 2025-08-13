@@ -29,7 +29,7 @@ try {
 // --- 7-Category, 100-Point Rubric Implementation ---
 
 // Utility: Call OpenAI with robust error handling
-async function callLLM(prompt, temperature = 0.1) {
+async function callLLM(prompt) {
   const model = process.env.OPENAI_CHAT_MODEL || "gpt-5-mini";
   const params = {
     model,
@@ -39,7 +39,7 @@ async function callLLM(prompt, temperature = 0.1) {
     ],
     // Keep responses small and cheap; JSON payload should be compact
     max_tokens: 450,
-    temperature,
+    temperature: 1,
     top_p: 1,
     // Force the model to return a JSON object
     response_format: { type: "json_object" },

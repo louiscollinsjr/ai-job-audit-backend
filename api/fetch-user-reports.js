@@ -29,15 +29,28 @@ router.get('/', async (req, res) => {
       console.log(`Fetching reports for user ID: ${userId}`);
       
       // Query the Supabase database for reports belonging to this user
+      console.log(`Querying reports for user ${userId}`);
       const { data: reports, error } = await supabase
         .from('reports')
         .select('*')
-        .eq('userid', userId)
-        .order('savedat', { ascending: false });
+        .eq('user_id', userId)
+        .order('saved_at', { ascending: false });
         
       if (error) {
-        console.error('Error fetching reports from Supabase:', error);
-        return res.status(500).json({ error: 'Database error when fetching reports' });
+        console.error('Supabase query error:', {
+          message: error.message,
+          code: error.code,
+          details: error.details
+        });
+        return res.status(500).json({ 
+          error: 'Database error',
+          details: error.message 
+        });
+      }
+      
+      if (!reports) {
+        console.warn('No reports found for user', userId);
+        return res.status(200).json([]);
       }
       
       // Transform the database results to match the expected frontend format
@@ -45,7 +58,7 @@ router.get('/', async (req, res) => {
         id: report.id,
         title: report.job_title || 'Untitled Job Post',
         company: report.company_name || 'Unknown Company',
-        date: report.savedat ? new Date(report.savedat).toISOString().split('T')[0] : '',
+        date: report.saved_at ? new Date(report.saved_at).toISOString().split('T')[0] : '',
         score: report.total_score || calculateOverallScore(report),
         status: 'Saved'
       }));
@@ -94,7 +107,7 @@ router.get('/:id', async (req, res) => {
         .from('reports')
         .select('*')
         .eq('id', reportId)
-        .eq('userid', userId)
+        .eq('user_id', userId)
         .single();
 
       if (error) {
@@ -111,7 +124,7 @@ router.get('/:id', async (req, res) => {
         id: report.id,
         title: report.job_title || 'Untitled Job Post',
         company: report.company_name || 'Unknown Company',
-        date: report.savedat ? new Date(report.savedat).toISOString().split('T')[0] : '',
+        date: report.saved_at ? new Date(report.saved_at).toISOString().split('T')[0] : '',
         score: report.total_score || calculateOverallScore(report),
         status: 'Saved',
         // We might need to return the full report data? The frontend might expect more.
