@@ -33,8 +33,8 @@ router.get('/', async (req, res) => {
       const { data: reports, error } = await supabase
         .from('reports')
         .select('*')
-        .eq('user_id', userId)
-        .order('saved_at', { ascending: false });
+        .eq('userid', userId)
+        .order('savedat', { ascending: false });
         
       if (error) {
         console.error('Supabase query error:', {
@@ -58,7 +58,7 @@ router.get('/', async (req, res) => {
         id: report.id,
         title: report.job_title || 'Untitled Job Post',
         company: report.company_name || 'Unknown Company',
-        date: report.saved_at ? new Date(report.saved_at).toISOString().split('T')[0] : '',
+        date: report.savedat ? new Date(report.savedat).toISOString().split('T')[0] : '',
         score: report.total_score || calculateOverallScore(report),
         status: 'Saved'
       }));
@@ -124,7 +124,7 @@ router.get('/:id', async (req, res) => {
         id: report.id,
         title: report.job_title || 'Untitled Job Post',
         company: report.company_name || 'Unknown Company',
-        date: report.saved_at ? new Date(report.saved_at).toISOString().split('T')[0] : '',
+        date: report.savedat ? new Date(report.savedat).toISOString().split('T')[0] : '',
         score: report.total_score || calculateOverallScore(report),
         status: 'Saved',
         // We might need to return the full report data? The frontend might expect more.
