@@ -366,8 +366,25 @@ module.exports = async function(req, res) {
         
         console.log('Firefox launch successful');
         
+        console.log('Creating browser context with realistic settings - START');
+        const context = await browser.newContext({
+          userAgent: process.env.PLAYWRIGHT_UA || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          locale: process.env.PLAYWRIGHT_LOCALE || 'en-US',
+          timezoneId: process.env.PLAYWRIGHT_TZ || 'UTC',
+          viewport: { width: 1366, height: 850 },
+          deviceScaleFactor: 1,
+          javaScriptEnabled: true,
+          colorScheme: 'light',
+          extraHTTPHeaders: {
+            'Accept-Language': 'en-US,en;q=0.9'
+          }
+        });
+        await context.addInitScript(() => {
+          // Mild stealth: make navigator.webdriver undefined
+          Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        });
         console.log('Creating new page - START');
-        const page = await browser.newPage();
+        const page = await context.newPage();
         console.log('Creating new page - END');
         
         console.log(`Navigating to URL: ${url} - START`);
@@ -377,6 +394,28 @@ module.exports = async function(req, res) {
         console.log('Getting page title - START');
         job_title = await page.title();
         console.log(`Page title: ${job_title}`);
+        
+        // Detect anti-bot/CF interstitials by title/body snippet
+        const antiBotSignals = [
+          /just a moment/i,
+          /attention required/i,
+          /cloudflare/i,
+          /verify you are human/i,
+          /checking your browser/i
+        ];
+        let bodySnippet = '';
+        try {
+          bodySnippet = await page.evaluate(() => (document.body?.innerText || '').slice(0, 1000));
+        } catch {}
+        if (antiBotSignals.some(rx => rx.test(job_title || '')) || antiBotSignals.some(rx => rx.test(bodySnippet))) {
+          console.log('Anti-bot page detected', { title: job_title });
+          try { await context.close(); } catch {}
+          try { await browser.close(); } catch {}
+          return res.status(403).json({
+            error: 'site_protected',
+            message: 'The target site appears protected by anti-bot (e.g., Cloudflare). Please paste the job description or upload a file instead.'
+          });
+        }
         
         console.log('Extracting page content - START');
         job_body = await page.evaluate(() => {
@@ -390,6 +429,7 @@ module.exports = async function(req, res) {
         console.log('Page HTML extracted successfully');
         
         console.log('Closing browser - START');
+        await context.close();
         await browser.close();
         console.log('Browser closed successfully');
       } catch (error) {
