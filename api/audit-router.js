@@ -5,8 +5,8 @@ const router = express.Router();
 const auditJobPost = require('./audit-job-post');
 const analyzeJob = require('./analyze-job');
 
-// Define routes with v1 prefix
-router.post('/v1/audit-job', auditJobPost);
-router.post('/v1/analyze-job', analyzeJob);
+// Define routes without embedding '/v1' since this router is mounted at '/api/v1'
+router.post('/audit-job', auditJobPost);
+router.post('/analyze-job', analyzeJob);
 
 module.exports = router;
