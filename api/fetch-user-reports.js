@@ -29,7 +29,14 @@ router.get('/', async (req, res) => {
       console.log(`Fetching reports for user ID: ${userId}`);
       
       // Query the Supabase database for reports belonging to this user
-      console.log(`Querying reports for user ${userId}`);
+      console.log('Querying reports for user:', userId);
+      
+      // First verify the userId is a valid UUID
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(userId)) {
+        throw new Error(`Invalid user ID format: ${userId}`);
+      }
+      
+      // Build query with explicit column selection matching schema
       const { data: reports, error } = await supabase
         .from('reports')
         .select('*')
@@ -107,7 +114,7 @@ router.get('/:id', async (req, res) => {
         .from('reports')
         .select('*')
         .eq('id', reportId)
-        .eq('user_id', userId)
+        .eq('userid', userId)
         .single();
 
       if (error) {
