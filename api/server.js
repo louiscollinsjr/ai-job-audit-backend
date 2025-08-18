@@ -1,8 +1,13 @@
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
+const rateLimit = require('express-rate-limit');
+const crypto = require('crypto');
 const app = express();
 const port = process.env.PORT || 3000;
+
+// Trust proxy headers (e.g., X-Forwarded-For) when behind a proxy/load balancer
+app.set('trust proxy', 1);
 
 // Import your API handlers
 const auditJobPost = require('./audit-job-post');
@@ -33,9 +38,48 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
+// Lightweight, configurable rate limiting for expensive endpoints
+const RL_ENABLED = !/^(0|false|off)$/i.test(String(process.env.RATE_LIMIT_ENABLED ?? '1').trim());
+const RL_WINDOW_MS = (() => {
+  const v = (process.env.RATE_LIMIT_WINDOW_MS ?? '60000').trim();
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : 60000;
+})();
+const RL_MAX_USER = (() => {
+  const v = (process.env.RATE_LIMIT_MAX_USER ?? '10').trim();
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : 10;
+})();
+const RL_MAX_IP = (() => {
+  const v = (process.env.RATE_LIMIT_MAX_IP ?? '30').trim();
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : 30;
+})();
+
+const expensiveRouteLimiter = rateLimit({
+  windowMs: RL_WINDOW_MS,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => !RL_ENABLED,
+  keyGenerator: (req, res) => {
+    const auth = req.headers['authorization'];
+    if (auth && auth.startsWith('Bearer ')) {
+      const token = auth.slice(7);
+      return crypto.createHash('sha256').update(token).digest('hex');
+    }
+    // Fallback to IP
+    return req.ip;
+  },
+  max: (req, res) => {
+    const hasAuth = typeof req.headers['authorization'] === 'string' && req.headers['authorization'].startsWith('Bearer ');
+    return hasAuth ? RL_MAX_USER : RL_MAX_IP;
+  }
+});
+
 // Set up routes
-app.post('/api/audit-job-post', auditJobPost);
-app.post('/api/audit-job-file', upload.single('file'), auditJobPost);
+app.post('/api/audit-job-post', expensiveRouteLimiter, auditJobPost);
+// Apply limiter before file upload to prevent unnecessary file processing
+app.post('/api/audit-job-file', expensiveRouteLimiter, upload.single('file'), auditJobPost);
 app.use('/api/analyze-job', analyzeJob);
 // JSON-LD generator routes (keep unversioned for backward compat; also mount under v1)
 app.use('/api/generate-jsonld', generateJsonLd);

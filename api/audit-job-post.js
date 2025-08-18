@@ -1,4 +1,6 @@
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-extra');
+const stealth = require('puppeteer-extra-plugin-stealth')();
+chromium.use(stealth);
 const OpenAI = require('openai');
 const { execSync } = require('child_process');
 const { supabase } = require('../utils/supabase'); // Import the supabase service client
@@ -17,11 +19,13 @@ try {
   throw error;
 }
 
-// Ensure browser is installed
+// Ensure browser is installed (optional at boot)
 try {
-  console.log('Checking if Playwright browsers are installed...');
-  execSync('npx playwright install chromium --with-deps', { stdio: 'inherit' });
-  console.log('Playwright browser installation verified');
+  if (process.env.PW_INSTALL_ON_BOOT === '1') {
+    console.log('Checking if Playwright browsers are installed...');
+    execSync('npx playwright install chromium --with-deps', { stdio: 'inherit' });
+    console.log('Playwright browser installation verified');
+  }
 } catch (error) {
   console.error('Failed to install Playwright browsers:', error.message);
 }
@@ -336,47 +340,58 @@ module.exports = async function(req, res) {
   if (url) {
     try {
       console.log('Launching Chromium for URL scraping - START');
-      console.log('Chromium launch options:', { args: ['--no-sandbox'], headless: true, timeout: 60000 });
-      
+      const isDebug = process.env.PW_DEBUG === '1';
+      const headlessOpt = isDebug ? false : (process.env.PW_HEADLESS ? !/^(0|false)$/i.test(process.env.PW_HEADLESS) : true);
+      const launchArgs = [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-blink-features=AutomationControlled'
+      ];
+      console.log('Chromium launch options:', { args: launchArgs, headless: headlessOpt, timeout: 60000 });
+
       try {
-        // More resilient browser launch with multiple fallback options
+        // Resilient browser launch with fallback install
         let browser;
         try {
-          browser = await chromium.launch({
-            args: ['--no-sandbox'],
-            headless: true, 
-            timeout: 60000
-          });
-          console.log('Chromium launched successfully with default options');
+          browser = await chromium.launch({ args: launchArgs, headless: headlessOpt, timeout: 60000 });
+          console.log('Chromium launched successfully with provided options');
         } catch (err) {
-          console.log('First launch attempt failed, trying with explicit download:', err.message);
-          // Try to install browser again if first launch fails
+          console.log('First launch attempt failed, trying reinstall:', err.message);
           try {
             execSync('npx playwright install chromium --with-deps', { stdio: 'inherit' });
-            browser = await chromium.launch({
-              args: ['--no-sandbox'], 
-              headless: true,
-              timeout: 60000
-            });
-            console.log('Chromium launched successfully after explicit installation');
+            browser = await chromium.launch({ args: launchArgs, headless: headlessOpt, timeout: 60000 });
+            console.log('Chromium launched successfully after reinstall');
           } catch (secondErr) {
             throw new Error(`Browser launch failed after installation attempt: ${secondErr.message}`);
           }
         }
-        
-        console.log('Firefox launch successful');
-        
+
+        // Rotate/override user agent and realistic headers
+        const uaPool = [
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        ];
+        const userAgent = process.env.PLAYWRIGHT_UA || uaPool[Math.floor(Math.random() * uaPool.length)];
+
         console.log('Creating browser context with realistic settings - START');
         const context = await browser.newContext({
-          userAgent: process.env.PLAYWRIGHT_UA || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          userAgent,
           locale: process.env.PLAYWRIGHT_LOCALE || 'en-US',
           timezoneId: process.env.PLAYWRIGHT_TZ || 'UTC',
-          viewport: { width: 1366, height: 850 },
-          deviceScaleFactor: 1,
+          viewport: { width: 1366, height: 900 },
+          deviceScaleFactor: 1.25,
           javaScriptEnabled: true,
           colorScheme: 'light',
           extraHTTPHeaders: {
-            'Accept-Language': 'en-US,en;q=0.9'
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1'
           }
         });
         await context.addInitScript(() => {
@@ -386,15 +401,16 @@ module.exports = async function(req, res) {
         console.log('Creating new page - START');
         const page = await context.newPage();
         console.log('Creating new page - END');
-        
+
         console.log(`Navigating to URL: ${url} - START`);
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
         console.log('Navigation complete');
-        
+
         console.log('Getting page title - START');
         job_title = await page.title();
         console.log(`Page title: ${job_title}`);
-        
+
         // Detect anti-bot/CF interstitials by title/body snippet
         const antiBotSignals = [
           /just a moment/i,
@@ -416,18 +432,50 @@ module.exports = async function(req, res) {
             message: 'The target site appears protected by anti-bot (e.g., Cloudflare). Please paste the job description or upload a file instead.'
           });
         }
-        
+
+        // Try to access Greenhouse iframe if present
+        let frameUsed = null;
+        let ghFrame = null;
+        try {
+          await page.waitForSelector('iframe', { timeout: 8000 });
+          const frames = page.frames();
+          ghFrame = frames.find(f => /greenhouse\.io|boards\.greenhouse\.io|job-boards\.greenhouse\.io/i.test(f.url()));
+          if (!ghFrame) {
+            const ghHandle = await page.$('iframe[src*="greenhouse.io"], iframe[src*="boards.greenhouse.io"], iframe[src*="job-boards.greenhouse.io"]');
+            if (ghHandle) ghFrame = await ghHandle.contentFrame();
+          }
+          if (ghFrame) {
+            frameUsed = ghFrame;
+            await ghFrame.waitForSelector('h1, .app-title, .job-title, main, #content', { timeout: 15000 }).catch(() => {});
+          }
+        } catch {}
+
         console.log('Extracting page content - START');
-        job_body = await page.evaluate(() => {
-          const main = document.querySelector('main') || document.body;
-          return main.innerText;
-        });
+        if (frameUsed) {
+          const results = await Promise.race([
+            frameUsed.evaluate(() => ({
+              title: (document.querySelector('h1, .app-title, .job-title')?.innerText || document.title || '').trim(),
+              text: (document.querySelector('main')?.innerText || document.body?.innerText || '').trim()
+            })),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('iframe extract timeout')), 20000))
+          ]).catch(() => null);
+          if (results) {
+            job_title = results.title || job_title;
+            job_body = results.text;
+            job_html = await frameUsed.content();
+          }
+        }
+        // Fallback to top-level page
+        if (!job_body || !job_html) {
+          job_body = await page.evaluate(() => {
+            const main = document.querySelector('main') || document.body;
+            return main.innerText;
+          });
+          job_html = await page.content();
+        }
         console.log(`Extracted content length: ${job_body.length} characters`);
-        
-        console.log('Getting page HTML - START');
-        job_html = await page.content();
         console.log('Page HTML extracted successfully');
-        
+
         console.log('Closing browser - START');
         await context.close();
         await browser.close();
