@@ -23,11 +23,16 @@ try {
 try {
   if (process.env.PW_INSTALL_ON_BOOT === '1') {
     console.log('Checking if Playwright browsers are installed...');
-    execSync('npx playwright install chromium --with-deps', { stdio: 'inherit' });
+    // Do not install system deps at runtime; assume container baked with deps
+    execSync('npx playwright install chromium', { stdio: 'inherit' });
     console.log('Playwright browser installation verified');
   }
 } catch (error) {
   console.error('Failed to install Playwright browsers:', error.message);
+  // In production, fail fast to avoid running without a working browser
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('Browser installation failed in production');
+  }
 }
 
 // --- 7-Category, 100-Point Rubric Implementation ---
@@ -359,7 +364,12 @@ module.exports = async function(req, res) {
         } catch (err) {
           console.log('First launch attempt failed, trying reinstall:', err.message);
           try {
-            execSync('npx playwright install chromium --with-deps', { stdio: 'inherit' });
+            // Avoid system deps at runtime; optionally allow reinstall in non-production
+            const allowRuntimeInstall = process.env.NODE_ENV !== 'production' && !/^(0|false|off)$/i.test(String(process.env.PW_ALLOW_RUNTIME_INSTALL ?? '0'));
+            if (!allowRuntimeInstall) {
+              throw new Error('Runtime browser installation is disabled');
+            }
+            execSync('npx playwright install chromium', { stdio: 'inherit' });
             browser = await chromium.launch({ args: launchArgs, headless: headlessOpt, timeout: 60000 });
             console.log('Chromium launched successfully after reinstall');
           } catch (secondErr) {
@@ -370,10 +380,18 @@ module.exports = async function(req, res) {
         // Rotate/override user agent and realistic headers
         const uaPool = [
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
           'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+          'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
         ];
-        const userAgent = process.env.PLAYWRIGHT_UA || uaPool[Math.floor(Math.random() * uaPool.length)];
+        function hashStr(s) { let h = 0; for (let i = 0; i < s.length; i++) { h = ((h << 5) - h) + s.charCodeAt(i); h |= 0; } return Math.abs(h); }
+        let uaIndexSeed = Math.floor(Math.random() * 1e6);
+        try {
+          uaIndexSeed = url ? hashStr(new URL(url).hostname + ':' + new Date().getUTCHours()) : uaIndexSeed;
+        } catch {}
+        const userAgent = process.env.PLAYWRIGHT_UA || uaPool[uaIndexSeed % uaPool.length];
 
         console.log('Creating browser context with realistic settings - START');
         const context = await browser.newContext({
@@ -442,7 +460,10 @@ module.exports = async function(req, res) {
           ghFrame = frames.find(f => /greenhouse\.io|boards\.greenhouse\.io|job-boards\.greenhouse\.io/i.test(f.url()));
           if (!ghFrame) {
             const ghHandle = await page.$('iframe[src*="greenhouse.io"], iframe[src*="boards.greenhouse.io"], iframe[src*="job-boards.greenhouse.io"]');
-            if (ghHandle) ghFrame = await ghHandle.contentFrame();
+            if (ghHandle) {
+              const frame = await ghHandle.contentFrame();
+              if (frame) ghFrame = frame;
+            }
           }
           if (ghFrame) {
             frameUsed = ghFrame;

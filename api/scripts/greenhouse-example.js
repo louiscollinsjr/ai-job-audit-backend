@@ -32,10 +32,18 @@ chromium.use(stealth);
 
   const uaPool = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
   ];
-  const userAgent = process.env.PLAYWRIGHT_UA || uaPool[Math.floor(Math.random() * uaPool.length)];
+  function hashStr(s) { let h = 0; for (let i = 0; i < s.length; i++) { h = ((h << 5) - h) + s.charCodeAt(i); h |= 0; } return Math.abs(h); }
+  let uaIndexSeed = Math.floor(Math.random() * 1e6);
+  try {
+    uaIndexSeed = url ? hashStr(new URL(url).hostname + ':' + new Date().getUTCHours()) : uaIndexSeed;
+  } catch {}
+  const userAgent = process.env.PLAYWRIGHT_UA || uaPool[uaIndexSeed % uaPool.length];
 
   let browser;
   try {
@@ -45,7 +53,12 @@ chromium.use(stealth);
     console.log('Trying to reinstall Chromium...');
     const { execSync } = require('child_process');
     try {
-      execSync('npx playwright install chromium --with-deps', { stdio: 'inherit' });
+      const allowRuntimeInstall = process.env.NODE_ENV !== 'production' && !/^(0|false|off)$/i.test(String(process.env.PW_ALLOW_RUNTIME_INSTALL ?? '0'));
+      if (!allowRuntimeInstall) {
+        throw new Error('Runtime browser installation is disabled. Enable with PW_ALLOW_RUNTIME_INSTALL=1 in non-production or install at build time.');
+      }
+      // Avoid installing system deps at runtime; assume container has OS deps
+      execSync('npx playwright install chromium', { stdio: 'inherit' });
       browser = await chromium.launch({ args: launchArgs, headless: headlessOpt, timeout: 60000 });
     } catch (e2) {
       console.error('Launch failed after reinstall:', e2.message);
@@ -92,7 +105,10 @@ chromium.use(stealth);
     ghFrame = frames.find(f => /greenhouse\.io|boards\.greenhouse\.io|job-boards\.greenhouse\.io/i.test(f.url()));
     if (!ghFrame) {
       const ghHandle = await page.$('iframe[src*="greenhouse.io"], iframe[src*="boards.greenhouse.io"], iframe[src*="job-boards.greenhouse.io"]');
-      if (ghHandle) ghFrame = await ghHandle.contentFrame();
+      if (ghHandle) {
+        const frame = await ghHandle.contentFrame();
+        if (frame) ghFrame = frame;
+      }
     }
     if (ghFrame) {
       await ghFrame.waitForSelector('h1, .app-title, .job-title, main, #content', { timeout: 15000 }).catch(() => {});
@@ -109,7 +125,9 @@ chromium.use(stealth);
         jobHtml = await ghFrame.content();
       }
     }
-  } catch {}
+  } catch (err) {
+    console.warn('[example] Greenhouse iframe extraction failed:', err?.message || err);
+  }
 
   // Fallback to top-level document
   if (!jobText || !jobHtml) {
