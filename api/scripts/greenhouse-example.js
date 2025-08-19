@@ -153,7 +153,7 @@ chromium.use(stealth);
           } catch {}
           return false;
         }, ghId).catch(() => false);
-        if (clicked) { console.log('[example] Clicked link for gh_jid:', jid); await page.waitForTimeout(1000); }
+        if (clicked) { console.log('[example] Clicked link for gh_jid:', ghId); await page.waitForTimeout(1000); }
       }
 
       await page.waitForTimeout(500);
