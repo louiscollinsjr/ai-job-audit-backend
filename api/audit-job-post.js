@@ -420,8 +420,30 @@ module.exports = async function(req, res) {
         const page = await context.newPage();
         console.log('Creating new page - END');
 
-        console.log(`Navigating to URL: ${url} - START`);
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        // Normalize accidentally escaped query chars from shell (e.g., \?gh_jid\=...)
+        let navUrl = url;
+        try {
+          if (navUrl && navUrl.includes('\\')) {
+            const cleaned = navUrl.replace(/\\(?=[?=&])/g, '');
+            if (cleaned !== navUrl) {
+              console.log('Normalized URL:', cleaned);
+              navUrl = cleaned;
+            }
+          }
+        } catch {}
+
+        // Track any Greenhouse network requests while navigating/interaction
+        const ghRequests = new Set();
+        const ghDomainRegex = /greenhouse\.io|boards\.greenhouse\.io|job-boards\.greenhouse\.io/i;
+        page.on('request', (req) => {
+          try {
+            const u = req.url();
+            if (ghDomainRegex.test(u)) ghRequests.add(u);
+          } catch {}
+        });
+
+        console.log(`Navigating to URL: ${navUrl} - START`);
+        await page.goto(navUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
         await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
         console.log('Navigation complete');
 
@@ -455,21 +477,81 @@ module.exports = async function(req, res) {
         let frameUsed = null;
         let ghFrame = null;
         try {
-          await page.waitForSelector('iframe', { timeout: 8000 });
-          const frames = page.frames();
-          ghFrame = frames.find(f => /greenhouse\.io|boards\.greenhouse\.io|job-boards\.greenhouse\.io/i.test(f.url()));
-          if (!ghFrame) {
+          // Allow iframes to attach (not necessarily visible)
+          await page.waitForSelector('iframe', { timeout: 20000, state: 'attached' }).catch(() => {});
+
+          // Poll for a Greenhouse iframe by URL or DOM handle
+          const ghRegex = /greenhouse\.io|boards\.greenhouse\.io|job-boards\.greenhouse\.io/i;
+          const deadline = Date.now() + 25000;
+          const ghId = (() => { try { return new URL(navUrl).searchParams.get('gh_jid'); } catch { return null; } })();
+          while (!ghFrame && Date.now() < deadline) {
+            // Check existing frames by URL
+            const frames = page.frames();
+            ghFrame = frames.find(f => ghRegex.test(f.url())) || null;
+            if (ghFrame) { console.log('[api] Found Greenhouse frame by URL:', ghFrame.url()); break; }
+
+            // Check DOM for iframe elements and resolve contentFrame
             const ghHandle = await page.$('iframe[src*="greenhouse.io"], iframe[src*="boards.greenhouse.io"], iframe[src*="job-boards.greenhouse.io"]');
             if (ghHandle) {
               const frame = await ghHandle.contentFrame();
-              if (frame) ghFrame = frame;
+              if (frame) { console.log('[api] Found Greenhouse frame via handle:', frame.url()); ghFrame = frame; break; }
             }
+
+            // If URL includes gh_jid, try to click a matching link to trigger embed
+            if (ghId) {
+              const clicked = await page.evaluate((jid) => {
+                try {
+                  const anchors = Array.from(document.querySelectorAll('a[href*="gh_jid="]'));
+                  const target = anchors.find(a => {
+                    try { return new URL(a.getAttribute('href'), location.href).searchParams.get('gh_jid') === jid; } catch { return false; }
+                  });
+                  if (target) {
+                    target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                    return true;
+                  }
+                } catch {}
+                return false;
+              }, ghId).catch(() => false);
+              if (clicked) { console.log('[api] Clicked link for gh_jid:', ghId); await page.waitForTimeout(1000); }
+            }
+
+            await page.waitForTimeout(500);
           }
+
           if (ghFrame) {
             frameUsed = ghFrame;
+            console.log('[api] Using Greenhouse iframe content from:', ghFrame.url());
             await ghFrame.waitForSelector('h1, .app-title, .job-title, main, #content', { timeout: 15000 }).catch(() => {});
+          } else {
+            // No iframe detected: log frames and try to navigate directly to a GH URL if present
+            const allFrames = page.frames();
+            console.log(`[api] No Greenhouse iframe found. Frames(${allFrames.length}):`, allFrames.map(f => f.url()).slice(0, 10));
+            const ghHref = await page.evaluate(() => {
+              const sel = 'a[href*="greenhouse.io"], a[href*="boards.greenhouse.io"], a[href*="job-boards.greenhouse.io"]';
+              const a = document.querySelector(sel);
+              return a ? a.href : null;
+            }).catch(() => null);
+            const ghEmbedFor = await page.evaluate(() => {
+              const s = document.querySelector('script[src*="boards.greenhouse.io/embed/job_board/js?for="]');
+              if (!s) return null;
+              try { return new URL(s.src, location.href).searchParams.get('for'); } catch { return null; }
+            }).catch(() => null);
+            const navigateTo = (ghId && ghEmbedFor)
+              ? `https://boards.greenhouse.io/embed/job_app?for=${encodeURIComponent(ghEmbedFor)}&token=${encodeURIComponent(ghId)}`
+              : (ghHref || Array.from(ghRequests)[0] || null);
+            if (navigateTo) {
+              console.log('[api] Navigating directly to Greenhouse URL:', navigateTo);
+              const ghPage = await context.newPage();
+              await ghPage.goto(navigateTo, { waitUntil: 'domcontentloaded', timeout: 45000 });
+              await ghPage.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
+              frameUsed = ghPage;
+            } else if (ghRequests.size) {
+              console.log('[api] Observed GH requests but no navigable link found:', Array.from(ghRequests).slice(0, 3));
+            }
           }
-        } catch {}
+        } catch (err) {
+          console.warn('[api] Greenhouse iframe extraction failed:', err?.message || err);
+        }
 
         console.log('Extracting page content - START');
         if (frameUsed) {
@@ -488,6 +570,7 @@ module.exports = async function(req, res) {
         }
         // Fallback to top-level page
         if (!job_body || !job_html) {
+          console.log('[api] Using top-level document fallback');
           job_body = await page.evaluate(() => {
             const main = document.querySelector('main') || document.body;
             return main.innerText;
