@@ -11,7 +11,7 @@ const openai = new OpenAI({
  * @param {number} temperature - Temperature parameter (0-1)
  * @returns {string} - The generated text response
  */
-async function callLLM(prompt, temperature = 0.2, options = {}) {
+async function callLLM(prompt, temperature = null, options = {}) {
   const {
     model = process.env.OPENAI_CHAT_MODEL || 'gpt-5-mini',
     top_p = 1,
@@ -27,10 +27,14 @@ async function callLLM(prompt, temperature = 0.2, options = {}) {
       { role: 'system', content: systemMessage },
       { role: 'user', content: prompt }
     ],
-    temperature,
     top_p,
     user
   };
+  
+  // Only add temperature if it's explicitly provided and not null
+  if (temperature !== null) {
+    params.temperature = temperature;
+  }
   if (response_format) params.response_format = response_format;
   if (typeof seed === 'number') params.seed = seed;
 
