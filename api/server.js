@@ -16,6 +16,8 @@ const rewriteJob = require('./rewrite-job');
 const generateJsonLd = require('./generate-jsonld');
 const test = require('./test');
 const jobVersionsRouter = require('./job-versions');
+const analyzeTextRouter = require('./analyze-text');
+const optimizeJobRouter = require('./optimize-job');
 
 // Configure file upload
 const upload = multer({
@@ -94,6 +96,8 @@ app.use('/api/v1', reportsRouter); // Mount reports router at /api/v1 path
 app.use('/api/v1/rewrite-job', rewriteRouter);
 app.use('/api/v1/generate-jsonld', generateJsonLd);
 app.use('/api/v1/job', jobVersionsRouter);
+app.use('/api/v1/analyze-text', analyzeTextRouter);
+app.use('/api/v1/optimize-job', optimizeJobRouter);
 
 // Debug all registered routes
 const routes = [];
