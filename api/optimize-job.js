@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { analyzeJobText } = require('../services/jobAnalyzer');
 const { saveJobPosting, updateJobPosting } = require('../services/databaseService');
+const { callLLM } = require('../utils/llmHelpers');
 
 /**
  * POST /api/v1/optimize-job

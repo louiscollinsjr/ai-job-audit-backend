@@ -5,7 +5,7 @@ const { getJobPostingById, updateJobPosting } = require('../services/databaseSer
 const { supabase } = require('../utils/supabase'); // Assuming supabase is initialized here
 
 /**
- * GET /api/rewrite-job/:id
+ * GET /api/v1/rewrite-job/:id
  *
  * Retrieves the job posting and its improvement data without creating a new rewrite
  */
@@ -19,6 +19,15 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Job posting not found' });
     }
     
+    // Get latest rewrite version if it exists
+    const { data: latestVersion } = await supabase
+      .from('rewrite_versions')
+      .select('*')
+      .eq('job_id', id)
+      .order('version_number', { ascending: false })
+      .limit(1)
+      .single();
+    
     // Get recommendations from either direct array or feedback details
     let recommendations = [];
     if (job.recommendations && Array.isArray(job.recommendations)) {
@@ -29,12 +38,14 @@ router.get('/:id', async (req, res) => {
       );
     }
     
-    // Return existing job data
+    // Return existing job data with latest version if available
     res.json({
-      original_text: job.original_text,
-      improvedText: job.improved_text || '',
+      original_text: job.job_body || job.original_text,
+      improvedText: latestVersion?.improved_text || job.improved_text || '',
       recommendations,
-      score: job.totalscore
+      score: job.total_score || job.totalscore,
+      hasRewrite: !!latestVersion || !!job.improved_text,
+      versionNumber: latestVersion?.version_number || 1
     });
   } catch (error) {
     console.error('Error retrieving job posting:', error);
@@ -46,13 +57,13 @@ router.get('/:id', async (req, res) => {
 });
 
 /**
- * POST /api/rewrite-job/:id
+ * POST /api/v1/rewrite-job/:id
  * 
  * Endpoint that:
  * 1. Fetches the job from the database by ID
  * 2. Uses the stored score feedback to improve the job text
  * 3. Returns the rewritten job posting
- * 4. Optionally saves it back to the database
+ * 4. Saves to both rewrite_versions and reports tables
  */
 router.post('/:id', async (req, res) => {
   try {
@@ -69,8 +80,9 @@ router.post('/:id', async (req, res) => {
     
     console.log('Job data:', JSON.stringify(job, null, 2));
     
-    // Validate required fields
-    if (!job.original_text) {
+    // Get original text from job_body or original_text
+    const originalText = job.job_body || job.original_text;
+    if (!originalText) {
       console.log('Missing original text');
       return res.status(400).json({ 
         error: 'Invalid job data', 
@@ -96,7 +108,7 @@ router.post('/:id', async (req, res) => {
     
     const prompt = `You are to output only the improved job posting text with no extra commentary, preamble, or explanation.\n\n` +
     `Rewrite this job posting to address the following issues.\n\n` +
-    `Original Posting:\n${job.original_text}\n\n` +
+    `Original Posting:\n${originalText}\n\n` +
     `Areas Needing Improvement:\n${recommendations.join('\n')}\n\n` +
     `Improved Version (output only the rewritten posting, nothing else):`;
     
@@ -105,27 +117,48 @@ router.post('/:id', async (req, res) => {
     
     // Save if requested
     if (saveToDatabase) {
+      // Get next version number
+      const { count } = await supabase
+        .from('rewrite_versions')
+        .select('*', { count: 'exact', head: true })
+        .eq('job_id', id);
+      
+      const nextVersion = (count || 0) + 1;
+      
       // First create version entry
       const { error: versionError } = await supabase
         .from('rewrite_versions')
         .insert({
           job_id: id,
           improved_text: improvedText,
-          created_at: new Date().toISOString()
+          created_at: new Date().toISOString(),
+          version_number: nextVersion
         });
       
-      if (versionError) throw versionError;
+      if (versionError) {
+        console.error('Error saving to rewrite_versions:', versionError);
+        throw versionError;
+      }
       
-      // Then update main improved_text
-      await updateJobPosting(id, { improved_text: improvedText });
+      // Then update main improved_text and original_text if missing
+      const updateData = { 
+        improved_text: improvedText
+      };
+      
+      if (!job.original_text && originalText) {
+        updateData.original_text = originalText;
+      }
+      
+      await updateJobPosting(id, updateData);
     }
     
     console.log('Handler completed successfully');
     return res.json({
-      original_text: job.original_text,
+      original_text: originalText,
       improvedText,
       recommendations,
-      score: job.totalscore
+      score: job.total_score || job.totalscore,
+      versionNumber: saveToDatabase ? ((await supabase.from('rewrite_versions').select('version_number', { count: 'exact' }).eq('job_id', id)).count || 0) + 1 : 1
     });
     
   } catch (error) {

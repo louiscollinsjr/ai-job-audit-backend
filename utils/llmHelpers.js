@@ -83,6 +83,14 @@ async function callLLM(prompt, temperature = null, options = {}) {
  */
 function extractJsonFromResponse(response) {
   try {
+    // Log the raw response for debugging
+    console.log('[extractJsonFromResponse] Raw response length:', response?.length || 0);
+    console.log('[extractJsonFromResponse] Raw response preview:', response?.substring(0, 200) + '...');
+    
+    if (!response || typeof response !== 'string') {
+      throw new Error('Empty or invalid response from LLM');
+    }
+    
     // Try to find JSON within the response using regex
     const jsonMatch = response.match(/```json([\s\S]*?)```|({[\s\S]*?})/);
     
@@ -92,13 +100,18 @@ function extractJsonFromResponse(response) {
       jsonString = jsonMatch[1] ? jsonMatch[1].trim() : jsonMatch[0];
     } else {
       // Otherwise, try to use the entire response
-      jsonString = response;
+      jsonString = response.trim();
     }
     
+    console.log('[extractJsonFromResponse] Extracted JSON string:', jsonString);
+    
     // Parse the JSON
-    return JSON.parse(jsonString);
+    const parsed = JSON.parse(jsonString);
+    console.log('[extractJsonFromResponse] Successfully parsed JSON');
+    return parsed;
   } catch (error) {
-    console.error('Error extracting JSON from response:', error);
+    console.error('[extractJsonFromResponse] Error extracting JSON from response:', error);
+    console.error('[extractJsonFromResponse] Response was:', response);
     throw new Error(`Failed to extract JSON from response: ${error.message}`);
   }
 }
