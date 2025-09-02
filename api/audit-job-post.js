@@ -39,7 +39,7 @@ try {
 
 // Utility: Call OpenAI with robust error handling
 async function callLLM(prompt) {
-  const model = process.env.OPENAI_CHAT_MODEL || "gpt-5-mini";
+  const model = process.env.OPENAI_CHAT_MODEL || "gpt-4o-mini";
   const params = {
     model,
     messages: [
@@ -47,7 +47,7 @@ async function callLLM(prompt) {
       { role: "user", content: prompt }
     ],
     // Keep responses small and cheap; JSON payload should be compact
-    max_tokens: 450,
+    max_completion_tokens: 450,
     temperature: 1,
     top_p: 1,
     // Force the model to return a JSON object
@@ -61,16 +61,24 @@ async function callLLM(prompt) {
   let lastError;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const response = await openai.chat.completions.create(params, { timeout: 20000 });
+      console.log(`[callLLM] Attempt ${attempt}/${maxAttempts} - calling OpenAI API`);
+      const response = await Promise.race([
+        openai.chat.completions.create(params),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('OpenAI API timeout after 30 seconds')), 30000)
+        )
+      ]);
+      console.log(`[callLLM] Attempt ${attempt} successful`);
       return response.choices[0].message.content.trim();
     } catch (err) {
+      console.error(`[callLLM] Attempt ${attempt} failed:`, err.message);
       lastError = err;
       const status = (err && err.status) || (err && err.code) || 0;
       const isRetryable = status === 429 || (typeof status === 'number' && status >= 500) || /timeout/i.test(String(err && err.message));
       if (attempt < maxAttempts && isRetryable) {
         const backoffMs = 300 * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 100);
         console.warn(`LLM call failed (attempt ${attempt}/${maxAttempts}). Retrying in ${backoffMs}ms...`, err?.message || err);
-        await new Promise(r => setTimeout(r, backoffMs));
+        await new Promise(r => setTimeout(r, 200)); // Sleep 200ms before next iteration (reduced for faster processing)
         continue;
       }
       throw err;
@@ -480,10 +488,12 @@ module.exports = async function(req, res) {
           // Allow iframes to attach (not necessarily visible)
           await page.waitForSelector('iframe', { timeout: 20000, state: 'attached' }).catch(() => {});
 
-          // Poll for a Greenhouse iframe by URL or DOM handle
+          // Poll for a Greenhouse iframe by URL or DOM handle (reduced timeout)
+          console.log('Checking for Greenhouse iframes - START');
           const ghRegex = /greenhouse\.io|boards\.greenhouse\.io|job-boards\.greenhouse\.io/i;
-          const deadline = Date.now() + 25000;
+          const deadline = Date.now() + 3000; // Reduced from 25s to 3s
           const ghId = (() => { try { return new URL(navUrl).searchParams.get('gh_jid'); } catch { return null; } })();
+          console.log('Greenhouse detection URL param gh_jid:', ghId);
           while (!ghFrame && Date.now() < deadline) {
             // Check existing frames by URL
             const frames = page.frames();
@@ -606,17 +616,29 @@ module.exports = async function(req, res) {
   }
 
   // --- 7-Category Audit ---
+  console.log('Starting 7-category audit analysis');
   try {
     const jobData = { job_title, job_body, job_html };
-    const [clarity, promptAlignment] = await Promise.all([
-      scoreClarityReadability(jobData),
-      scorePromptAlignment(jobData)
+    
+    console.log('Running LLM-based scoring (clarity & prompt alignment)');
+    const [clarity, promptAlignment] = await Promise.race([
+      Promise.all([
+        scoreClarityReadability(jobData),
+        scorePromptAlignment(jobData)
+      ]),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('LLM analysis timeout after 45 seconds')), 45000)
+      )
     ]);
+    console.log('LLM-based scoring completed');
+    
+    console.log('Running deterministic scoring functions');
     const structuredData = scoreStructuredDataPresence(jobData);
     const recency = scoreRecencyFreshness(jobData);
     const keywordTargeting = scoreKeywordTargeting(jobData);
     const compensation = scoreCompensationTransparency(jobData);
     const pageContext = scorePageContextCleanliness(jobData);
+    console.log('All scoring functions completed');
     const total_score =
       clarity.score + promptAlignment.score + structuredData.score +
       recency.score + keywordTargeting.score + compensation.score + pageContext.score;

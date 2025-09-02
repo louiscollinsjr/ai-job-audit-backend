@@ -13,7 +13,7 @@ const openai = new OpenAI({
  */
 async function callLLM(prompt, temperature = null, options = {}) {
   const {
-    model = process.env.OPENAI_CHAT_MODEL || 'gpt-5-mini',
+    model = process.env.OPENAI_CHAT_MODEL || 'gpt-4o-mini',
     top_p = 1,
     user = 'utils/llmHelpers',
     response_format,

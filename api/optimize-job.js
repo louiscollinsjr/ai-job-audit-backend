@@ -1,8 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { analyzeJobText } = require('../services/jobAnalyzer');
-const { callLLM } = require('../utils/llmHelpers');
-const { saveJobPosting } = require('../services/databaseService');
+const { saveJobPosting, updateJobPosting } = require('../services/databaseService');
 
 /**
  * POST /api/v1/optimize-job
@@ -11,11 +10,10 @@ const { saveJobPosting } = require('../services/databaseService');
 router.post('/', async (req, res) => {
   try {
     const { text, job_id } = req.body;
+    console.log('[DEBUG] optimize-job: Starting optimization for job_id:', job_id);
     
     if (!text || typeof text !== 'string') {
-      return res.status(400).json({ 
-        error: 'Text is required and must be a string' 
-      });
+      return res.status(400).json({ error: 'Job posting text is required' });
     }
 
     // 1. Analyze original text
@@ -34,20 +32,29 @@ router.post('/', async (req, res) => {
       optimizationResult.improvements
     );
 
-    // 5. Save to database if job_id provided
+    // Save to database if job_id provided
     let savedData = null;
     if (job_id) {
       try {
-        savedData = await saveJobPosting({
-          original_text: text,
+        // Prepare optimization data for storage
+        const optimizationData = {
+          originalText: text,
+          optimizedText: optimizationResult.optimizedText,
+          originalScore: originalAnalysis.score,
+          optimizedScore: optimizedAnalysis.score,
+          scoreImprovement: optimizedAnalysis.score - originalAnalysis.score,
+          workingWell: improvementReport.workingWell,
+          appliedImprovements: improvementReport.appliedImprovements,
+          potentialImprovements: improvementReport.potentialImprovements,
+          originalAnalysis,
+          optimizedAnalysis,
+          lastOptimized: new Date().toISOString()
+        };
+        
+        savedData = await updateJobPosting(job_id, {
           improved_text: optimizationResult.optimizedText,
           total_score: optimizedAnalysis.score,
-          feedback: optimizedAnalysis.feedback,
-          job_title: originalAnalysis.job_title || 'Job Posting',
-          red_flags: optimizedAnalysis.red_flags || [],
-          recommendations: improvementReport.appliedImprovements.map(imp => imp.description),
-          categories: optimizedAnalysis.categories || {},
-          improvement_details: improvementReport
+          optimization_data: optimizationData
         });
       } catch (dbError) {
         console.error('Database save error:', dbError);

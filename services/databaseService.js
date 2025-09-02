@@ -198,6 +198,8 @@ async function getJobPostingById(id) {
       recommendations: data.recommendations,
       red_flags: data.red_flags,
       original_report: data.original_report,
+      optimization_data: data.optimization_data,
+      updated_at: data.updated_at,
       savedat: data.savedat
     };
   } catch (error) {

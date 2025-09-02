@@ -77,41 +77,117 @@ const scoreCompleteness = async (job_body) => {
   return extractJsonFromResponse(response);
 };
 
-// Function to extract text from URL
+// Function to extract text from URL with robust error handling and timeouts
 async function extractTextFromUrl(url) {
+  let browser = null;
+  let context = null;
+  
   try {
-    const browser = await playwright.chromium.launch();
-    const context = await browser.newContext();
-    const page = await context.newPage();
-    await page.goto(url);
+    console.log(`[extractTextFromUrl] Starting extraction for: ${url}`);
     
-    // Extract job posting content - this is a simplified example
-    // You may need to adjust selectors based on the target sites
+    // Launch browser with stealth mode and proper config
+    browser = await playwright.chromium.launch({
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--disable-gpu'
+      ]
+    });
+    
+    // Create context with realistic user agent and settings
+    context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+      locale: 'en-US',
+      timezoneId: 'UTC',
+      viewport: { width: 1280, height: 720 },
+      ignoreHTTPSErrors: true
+    });
+    
+    const page = await context.newPage();
+    
+    // Set page timeout
+    page.setDefaultTimeout(30000);
+    page.setDefaultNavigationTimeout(45000);
+    
+    // Navigate with proper timeout and wait conditions
+    console.log(`[extractTextFromUrl] Navigating to: ${url}`);
+    await page.goto(url, { 
+      waitUntil: 'domcontentloaded', 
+      timeout: 45000 
+    });
+    
+    // Wait for content to load
+    await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {
+      console.log('[extractTextFromUrl] Network idle timeout - continuing anyway');
+    });
+    
+    // Extract job posting content with multiple fallback strategies
     const job_body = await page.evaluate(() => {
-      // Look for common job posting containers
+      // Look for common job posting containers (in priority order)
       const possibleSelectors = [
         '.job-description',
-        '.job-posting',
+        '.job-posting', 
+        '.job-content',
+        '.job-details',
+        '#job-description',
+        '[class*="job-desc"]',
+        '[class*="description"]',
         'article',
         'main',
-        '.job-details',
-        '#job-description'
+        '.content',
+        '#content'
       ];
       
       for (const selector of possibleSelectors) {
         const element = document.querySelector(selector);
-        if (element) return element.innerText;
+        if (element && element.innerText && element.innerText.trim().length > 100) {
+          console.log(`Found content using selector: ${selector}`);
+          return element.innerText.trim();
+        }
       }
       
       // Fallback to body if specific containers aren't found
-      return document.body.innerText;
+      const bodyText = document.body.innerText || '';
+      console.log(`Using fallback body text, length: ${bodyText.length}`);
+      return bodyText.trim();
     });
     
-    await browser.close();
+    console.log(`[extractTextFromUrl] Extracted ${job_body.length} characters`);
+    
+    // Validate extracted content
+    if (!job_body || job_body.length < 50) {
+      throw new Error('Insufficient content extracted from URL - page may be protected or empty');
+    }
+    
     return job_body;
+    
   } catch (error) {
-    console.error('Error extracting text from URL:', error);
-    throw new Error(`Failed to extract job text from URL: ${error.message}`);
+    console.error('[extractTextFromUrl] Error:', error);
+    
+    // Check for common error types and provide helpful messages
+    if (error.message.includes('timeout') || error.message.includes('Navigation timeout')) {
+      throw new Error('Page took too long to load. The site may be slow or protected by anti-bot measures.');
+    } else if (error.message.includes('net::ERR_') || error.message.includes('Protocol error')) {
+      throw new Error('Network error accessing the URL. Please check the URL is valid and accessible.');
+    } else if (error.message.includes('AbortError')) {
+      throw new Error('Request was aborted. The site may have connection issues.');
+    } else {
+      throw new Error(`Failed to extract job text from URL: ${error.message}`);
+    }
+  } finally {
+    // Ensure cleanup happens even if there are errors
+    try {
+      if (context) await context.close();
+      if (browser) await browser.close();
+      console.log('[extractTextFromUrl] Browser cleanup completed');
+    } catch (cleanupError) {
+      console.error('[extractTextFromUrl] Cleanup error:', cleanupError);
+    }
   }
 }
 

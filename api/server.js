@@ -18,6 +18,7 @@ const test = require('./test');
 const jobVersionsRouter = require('./job-versions');
 const analyzeTextRouter = require('./analyze-text');
 const optimizeJobRouter = require('./optimize-job');
+const getOptimizationRoute = require('./get-optimization');
 
 // Configure file upload
 const upload = multer({
@@ -78,8 +79,25 @@ const expensiveRouteLimiter = rateLimit({
   }
 });
 
+// Timeout middleware for expensive operations
+const timeoutMiddleware = (timeoutMs) => (req, res, next) => {
+  const timeout = setTimeout(() => {
+    if (!res.headersSent) {
+      console.error(`Request timeout after ${timeoutMs}ms for ${req.path}`);
+      res.status(408).json({ 
+        error: 'Request timeout', 
+        message: 'The request took too long to process. Please try again.' 
+      });
+    }
+  }, timeoutMs);
+  
+  res.on('finish', () => clearTimeout(timeout));
+  res.on('close', () => clearTimeout(timeout));
+  next();
+};
+
 // Set up routes
-app.post('/api/audit-job-post', expensiveRouteLimiter, auditJobPost);
+app.post('/api/audit-job-post', timeoutMiddleware(120000), expensiveRouteLimiter, auditJobPost);
 // Apply limiter before file upload to prevent unnecessary file processing
 app.post('/api/audit-job-file', expensiveRouteLimiter, upload.single('file'), auditJobPost);
 app.use('/api/analyze-job', analyzeJob);
@@ -98,6 +116,7 @@ app.use('/api/v1/generate-jsonld', generateJsonLd);
 app.use('/api/v1/job', jobVersionsRouter);
 app.use('/api/v1/analyze-text', analyzeTextRouter);
 app.use('/api/v1/optimize-job', optimizeJobRouter);
+app.get('/api/v1/optimize-job/:id', getOptimizationRoute);
 
 // Debug all registered routes
 const routes = [];
