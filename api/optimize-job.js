@@ -83,7 +83,7 @@ router.post('/', async (req, res) => {
     }
 
     const originalText = report.job_body;
-    const originalScore = report.totalscore || report.total_score || 0;
+    const originalScore = report.total_score || 0;
     
     // 2. Generate optimized version with structured JSON output
     const optimizationResult = await generateOptimizedJobPost(originalText, report);
@@ -124,17 +124,18 @@ router.post('/', async (req, res) => {
       return res.status(500).json({ error: 'Failed to save optimization', details: insertError.message });
     }
     
-    // 6. Update reports.improved_text and reports.total_score to reflect the latest optimization
+    // 6. Update reports.improved_text and total_score to reflect the latest optimization
     const { error: updateError } = await supabase
       .from('reports')
       .update({
         improved_text: optimizationResult.rewrittenText,
-        totalscore: optimizedScore
+        total_score: optimizedScore
       })
       .eq('id', report_id);
     
     if (updateError) {
       console.warn('Error updating report with latest optimization:', updateError);
+      // Don't fail the whole request - optimization was still saved successfully
     }
     
     // 7. Respond to client with structured data
@@ -164,7 +165,7 @@ router.post('/', async (req, res) => {
  */
 async function generateOptimizedJobPost(originalText, report) {
   const recommendations = report.recommendations || [];
-  const redFlags = report.redflags || report.red_flags || [];
+  const redFlags = report.red_flags || [];
   const categories = report.categories || {};
   
   // Create comprehensive improvement analysis
