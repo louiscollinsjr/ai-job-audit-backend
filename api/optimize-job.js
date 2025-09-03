@@ -72,6 +72,7 @@ router.post('/', async (req, res) => {
     }
 
     // 1. Fetch the original report
+    console.log('[DEBUG] optimize-job: Fetching report from database');
     const { data: report, error: reportError } = await supabase
       .from('reports')
       .select('*')
@@ -79,16 +80,25 @@ router.post('/', async (req, res) => {
       .single();
     
     if (reportError || !report) {
+      console.log('[DEBUG] optimize-job: Report not found:', reportError);
       return res.status(404).json({ error: 'Report not found' });
     }
 
+    console.log('[DEBUG] optimize-job: Report found, job_body length:', report.job_body?.length);
     const originalText = report.job_body;
     const originalScore = report.total_score || 0;
     
     // 2. Generate optimized version with structured JSON output
-    const optimizationResult = await generateOptimizedJobPost(originalText, report);
+    console.log('[DEBUG] optimize-job: Starting LLM optimization');
+    const rawOptimizationResult = await generateOptimizedJobPost(originalText, report);
+    console.log('[DEBUG] optimize-job: LLM optimization completed');
     
-    // 3. Run fresh analysis on optimized text to get new score
+    // 3. Verify and refine the optimization result
+    console.log('[DEBUG] optimize-job: Starting verification and refinement');
+    const optimizationResult = await verifyAndRefineOptimization(originalText, rawOptimizationResult.rewrittenText, rawOptimizationResult);
+    console.log('[DEBUG] optimize-job: Verification and refinement completed');
+    
+    // 4. Run fresh analysis on optimized text to get new score
     const optimizedScore = await analyzeOptimizedText(optimizationResult.rewrittenText);
     
     // 4. Query optimizations for the highest version of this report_id
@@ -143,12 +153,12 @@ router.post('/', async (req, res) => {
       id: newOptimization.id,
       report_id,
       version_number: nextVersion,
-      rewrittenText: optimizationResult.rewrittenText,
-      changesMade: optimizationResult.changesMade,
-      unaddressedItems: optimizationResult.unaddressedItems,
-      originalScore,
-      optimizedScore,
-      scoreImprovement: optimizedScore - originalScore,
+      rewritten_text: optimizationResult.rewrittenText,
+      change_log: optimizationResult.changesMade,
+      unaddressed_items: optimizationResult.unaddressedItems,
+      original_score: originalScore,
+      new_score: optimizedScore,
+      score_improvement: optimizedScore - originalScore,
       created_at: newOptimization.created_at
     });
   } catch (error) {
@@ -159,6 +169,93 @@ router.post('/', async (req, res) => {
     });
   }
 });
+
+/**
+ * Verification and refinement layer for AI-generated optimizations
+ * This function acts as a quality assurance check to prevent factual errors
+ */
+async function verifyAndRefineOptimization(originalText, optimizedText, optimizationResult) {
+  console.log('[DEBUG] verifyAndRefineOptimization: Starting verification process');
+  
+  // Create a deep copy to avoid mutating the original
+  const refinedResult = {
+    ...optimizationResult,
+    changesMade: [...optimizationResult.changesMade],
+    unaddressedItems: [...optimizationResult.unaddressedItems]
+  };
+
+  // 1. SALARY VERIFICATION
+  // Check if salary range exists in either original or optimized text
+  const salaryPatterns = [
+    /\$[\d,]+\s*[-–]\s*\$[\d,]+/g,           // $80,000 - $100,000
+    /\$[\d,]+\s*to\s*\$[\d,]+/gi,            // $80,000 to $100,000
+    /[\d,]+k\s*[-–]\s*[\d,]+k/gi,            // 90k - 110k
+    /[\d,]+k\s*to\s*[\d,]+k/gi,              // 90k to 110k
+    /salary.*\$[\d,]+/gi,                     // salary $80,000
+    /compensation.*\$[\d,]+/gi,               // compensation $90,000
+    /pay.*\$[\d,]+/gi                         // pay $70,000
+  ];
+
+  const hasSalaryInOriginal = salaryPatterns.some(pattern => pattern.test(originalText));
+  const hasSalaryInOptimized = salaryPatterns.some(pattern => pattern.test(optimizedText));
+  
+  if (hasSalaryInOriginal || hasSalaryInOptimized) {
+    // Remove any "Missing Salary" related unaddressed items
+    const originalCount = refinedResult.unaddressedItems.length;
+    refinedResult.unaddressedItems = refinedResult.unaddressedItems.filter(item => 
+      !/(missing|lack|absent).*salary/gi.test(item.category + ' ' + item.summary)
+    );
+    
+    if (refinedResult.unaddressedItems.length < originalCount) {
+      console.log('[DEBUG] verifyAndRefineOptimization: Corrected salary verification - removed false "missing salary" claim');
+    }
+  }
+
+  // 2. FORMATTING VERIFICATION
+  // Check if AI claimed to apply formatting but didn't actually do it
+  const claimedFormatting = refinedResult.changesMade.some(change => 
+    /(format|structure|markdown|header|bullet)/gi.test(change.category + ' ' + change.summary)
+  );
+  
+  if (claimedFormatting) {
+    const hasMarkdownHeaders = /^#{1,6}\s/gm.test(optimizedText);
+    const hasBulletPoints = /^\s*[-*+]\s/gm.test(optimizedText);
+    const hasNumberedLists = /^\s*\d+\.\s/gm.test(optimizedText);
+    const hasBoldText = /\*\*[^*]+\*\*/g.test(optimizedText);
+    
+    const actualFormattingElements = [hasMarkdownHeaders, hasBulletPoints, hasNumberedLists, hasBoldText].filter(Boolean).length;
+    
+    if (actualFormattingElements < 2) {
+      console.log('[DEBUG] verifyAndRefineOptimization: Warning - AI claimed formatting improvements but minimal Markdown elements found');
+      
+      // Add a note about incomplete formatting
+      refinedResult.unaddressedItems.push({
+        category: "Formatting Verification",
+        summary: "Claimed formatting improvements may be incomplete",
+        reasoning: "Verification detected minimal Markdown elements despite formatting claims"
+      });
+    }
+  }
+
+  // 3. CONTENT PRESERVATION CHECK
+  // Ensure important keywords from original are preserved in optimized version
+  const importantKeywords = originalText.match(/\b(remote|hybrid|senior|junior|lead|manager|engineer|developer|salary|benefits)\b/gi) || [];
+  const preservedKeywords = importantKeywords.filter(keyword => 
+    new RegExp(keyword, 'gi').test(optimizedText)
+  );
+  
+  if (importantKeywords.length > 0 && (preservedKeywords.length / importantKeywords.length) < 0.7) {
+    console.log('[DEBUG] verifyAndRefineOptimization: Warning - Potential important keyword loss detected');
+    refinedResult.unaddressedItems.push({
+      category: "Content Preservation",
+      summary: "Some important keywords may have been lost during optimization",
+      reasoning: "Verification detected potential loss of key terms from original posting"
+    });
+  }
+
+  console.log('[DEBUG] verifyAndRefineOptimization: Verification complete');
+  return refinedResult;
+}
 
 /**
  * Generate optimized job posting with structured JSON output
@@ -220,7 +317,9 @@ Rules:
 - Note what you couldn't address and why`;
 
   try {
+    console.log('[DEBUG] generateOptimizedJobPost: Calling LLM with prompt length:', prompt.length);
     const response = await callLLM(prompt);
+    console.log('[DEBUG] generateOptimizedJobPost: LLM response received, length:', response?.length);
     const parsed = JSON.parse(response);
     
     // Validate required fields

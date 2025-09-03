@@ -19,6 +19,7 @@ const jobVersionsRouter = require('./job-versions');
 const analyzeTextRouter = require('./analyze-text');
 const optimizeJobRouter = require('./optimize-job');
 const getOptimizationRoute = require('./get-optimization');
+const optimizationsRouter = require('./optimizations-router');
 
 // Configure file upload
 const upload = multer({
@@ -117,6 +118,7 @@ app.use('/api/v1/job', jobVersionsRouter);
 app.use('/api/v1/analyze-text', analyzeTextRouter);
 app.use('/api/v1/optimize-job', optimizeJobRouter);
 app.get('/api/v1/optimize-job/:id', getOptimizationRoute);
+app.use('/api/v1/optimizations', optimizationsRouter);
 
 // Debug all registered routes
 const routes = [];
