@@ -37,6 +37,34 @@ try {
 
 // --- 7-Category, 100-Point Rubric Implementation ---
 
+// Pre-analysis cleaning helper function
+async function cleanScrapedText(rawText) {
+  if (!rawText || typeof rawText !== 'string') {
+    return rawText;
+  }
+
+  try {
+    const cleaningPrompt = `Clean this scraped job posting by removing navigation elements, ads, "similar jobs" sections, and boilerplate while preserving all core job posting content (title, responsibilities, qualifications, benefits, company info).
+
+Return only the cleaned job description text with no commentary or formatting:
+
+${rawText}`;
+
+    const cleanedText = await callLLM(cleaningPrompt);
+    
+    // Basic validation - if cleaned text is too short compared to original, return original
+    if (cleanedText && cleanedText.length > rawText.length * 0.3) {
+      return cleanedText.trim();
+    } else {
+      console.warn('Cleaned text too short, returning original');
+      return rawText;
+    }
+  } catch (error) {
+    console.warn('Text cleaning failed, returning original:', error.message);
+    return rawText;
+  }
+}
+
 // Utility: Call OpenAI with robust error handling
 async function callLLM(prompt) {
   const model = process.env.OPENAI_CHAT_MODEL || "gpt-4o-mini";
@@ -615,10 +643,28 @@ module.exports = async function(req, res) {
     }
   }
 
+  // --- Pre-Analysis Cleaning ---
+  console.log('Starting pre-analysis text cleaning');
+  let cleaned_job_body = job_body;
+  try {
+    // Only clean if text seems to have navigation/boilerplate (heuristic check)
+    const needsCleaning = /(similar jobs|apply now|company|navigation|footer|header)/i.test(job_body.substring(0, 500)) &&
+                          job_body.length > 2000;
+    
+    if (needsCleaning) {
+      cleaned_job_body = await cleanScrapedText(job_body);
+      console.log(`Text cleaning completed. Original: ${job_body.length} chars, Cleaned: ${cleaned_job_body.length} chars`);
+    } else {
+      console.log('Skipping text cleaning - content appears clean already');
+    }
+  } catch (error) {
+    console.warn('Text cleaning failed, using original text:', error.message);
+  }
+
   // --- 7-Category Audit ---
   console.log('Starting 7-category audit analysis');
   try {
-    const jobData = { job_title, job_body, job_html };
+    const jobData = { job_title, job_body: cleaned_job_body, job_html };
     
     console.log('Running LLM-based scoring (clarity & prompt alignment)');
     const [clarity, promptAlignment] = await Promise.race([
@@ -686,7 +732,7 @@ module.exports = async function(req, res) {
       const reportData = {
         userid: userId || null, // Explicitly set to null for anonymous users
         job_title,
-        job_body,
+        job_body: cleaned_job_body, // Store cleaned version as primary
         feedback,
         total_score,
         categories,
@@ -694,8 +740,8 @@ module.exports = async function(req, res) {
         red_flags,
         savedat: new Date().toISOString(),
         source: 'api',
-        original_text: job_body,
-        original_report: JSON.stringify(jobData)
+        original_text: job_body, // Store original scraped text for debugging/auditing
+        original_report: JSON.stringify({ ...jobData, raw_scraped_text: job_body })
       };
       
       console.log('Saving report to database with service role key...');
