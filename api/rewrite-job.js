@@ -19,14 +19,25 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Job posting not found' });
     }
     
-    // Get latest rewrite version if it exists
-    const { data: latestVersion } = await supabase
-      .from('rewrite_versions')
-      .select('*')
-      .eq('job_id', id)
-      .order('version_number', { ascending: false })
-      .limit(1)
-      .single();
+    // Get latest rewrite version if it exists (handle gracefully if table doesn't exist)
+    let latestVersion = null;
+    try {
+      const { data, error } = await supabase
+        .from('rewrite_versions')
+        .select('*')
+        .eq('job_id', id)
+        .order('version_number', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      
+      if (!error) {
+        latestVersion = data;
+      } else {
+        console.warn('Could not query rewrite_versions table:', error.message);
+      }
+    } catch (err) {
+      console.warn('rewrite_versions table may not exist or have RLS issues:', err.message);
+    }
     
     // Get recommendations from either direct array or feedback details
     let recommendations = [];
@@ -117,30 +128,37 @@ router.post('/:id', async (req, res) => {
     
     // Save if requested
     if (saveToDatabase) {
-      // Get next version number
-      const { count } = await supabase
-        .from('rewrite_versions')
-        .select('*', { count: 'exact', head: true })
-        .eq('job_id', id);
-      
-      const nextVersion = (count || 0) + 1;
-      
-      // First create version entry
-      const { error: versionError } = await supabase
-        .from('rewrite_versions')
-        .insert({
-          job_id: id,
-          improved_text: improvedText,
-          created_at: new Date().toISOString(),
-          version_number: nextVersion
-        });
-      
-      if (versionError) {
-        console.error('Error saving to rewrite_versions:', versionError);
-        throw versionError;
+      // Try to save to rewrite_versions table if it exists
+      let versionSaved = false;
+      try {
+        // Get next version number
+        const { count } = await supabase
+          .from('rewrite_versions')
+          .select('*', { count: 'exact', head: true })
+          .eq('job_id', id);
+        
+        const nextVersion = (count || 0) + 1;
+        
+        // Create version entry
+        const { error: versionError } = await supabase
+          .from('rewrite_versions')
+          .insert({
+            job_id: id,
+            improved_text: improvedText,
+            created_at: new Date().toISOString(),
+            version_number: nextVersion
+          });
+        
+        if (versionError) {
+          console.warn('Could not save to rewrite_versions table:', versionError.message);
+        } else {
+          versionSaved = true;
+        }
+      } catch (err) {
+        console.warn('rewrite_versions table may not exist, skipping version tracking:', err.message);
       }
       
-      // Then update main improved_text and original_text if missing
+      // Always update main reports table
       const updateData = { 
         improved_text: improvedText
       };
@@ -150,6 +168,10 @@ router.post('/:id', async (req, res) => {
       }
       
       await updateJobPosting(id, updateData);
+      
+      if (!versionSaved) {
+        console.log('Note: Rewrite saved to reports table but version tracking unavailable');
+      }
     }
     
     console.log('Handler completed successfully');
