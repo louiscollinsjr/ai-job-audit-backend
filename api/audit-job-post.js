@@ -6,6 +6,50 @@ const { supabase } = require('../utils/supabase');
 const { scoreJob7Category } = require('../services/scoringService');
 const { scoreJobEnhanced } = require('../services/scoringServiceV2');
 
+// Browser instance pooling for performance
+let browserInstance = null;
+let lastBrowserUse = Date.now();
+const BROWSER_IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+
+async function getOrCreateBrowser(launchArgs, headlessOpt) {
+  const now = Date.now();
+  
+  // Reuse existing browser if still warm
+  if (browserInstance && (now - lastBrowserUse) < BROWSER_IDLE_TIMEOUT) {
+    try {
+      // Test if browser is still alive
+      const contexts = browserInstance.contexts();
+      lastBrowserUse = now;
+      console.log('[Browser Pool] Reusing warm browser instance');
+      return browserInstance;
+    } catch (err) {
+      console.log('[Browser Pool] Existing browser dead, creating new one');
+      browserInstance = null;
+    }
+  }
+  
+  // Close old browser if exists
+  if (browserInstance) {
+    try {
+      await browserInstance.close();
+    } catch {}
+    browserInstance = null;
+  }
+  
+  // Create new browser
+  console.log('[Browser Pool] Creating new browser instance');
+  browserInstance = await chromium.launch({ args: launchArgs, headless: headlessOpt, timeout: 60000 });
+  lastBrowserUse = now;
+  return browserInstance;
+}
+
+// Cleanup on process exit
+process.on('SIGTERM', async () => {
+  if (browserInstance) {
+    await browserInstance.close();
+  }
+});
+
 // Ensure browser is installed (optional at boot)
 try {
   if (process.env.PW_INSTALL_ON_BOOT === '1') {
@@ -74,21 +118,22 @@ module.exports = async function(req, res) {
       console.log('Chromium launch options:', { args: launchArgs, headless: headlessOpt, timeout: 60000 });
 
       try {
-        // Resilient browser launch with fallback install
+        // Use browser pooling for performance
         let browser;
         try {
-          browser = await chromium.launch({ args: launchArgs, headless: headlessOpt, timeout: 60000 });
-          console.log('Chromium launched successfully with provided options');
+          browser = await getOrCreateBrowser(launchArgs, headlessOpt);
+          console.log('Browser ready (pooled or new)');
         } catch (err) {
-          console.log('First launch attempt failed, trying reinstall:', err.message);
+          console.log('Browser pool failed, trying fresh launch:', err.message);
           try {
-            // Avoid system deps at runtime; optionally allow reinstall in non-production
+            // Fallback: try fresh launch with optional reinstall
             const allowRuntimeInstall = process.env.NODE_ENV !== 'production' && !/^(0|false|off)$/i.test(String(process.env.PW_ALLOW_RUNTIME_INSTALL ?? '0'));
             if (!allowRuntimeInstall) {
               throw new Error('Runtime browser installation is disabled');
             }
             execSync('npx playwright install chromium', { stdio: 'inherit' });
             browser = await chromium.launch({ args: launchArgs, headless: headlessOpt, timeout: 60000 });
+            browserInstance = browser; // Update pool
             console.log('Chromium launched successfully after reinstall');
           } catch (secondErr) {
             throw new Error(`Browser launch failed after installation attempt: ${secondErr.message}`);
@@ -162,7 +207,10 @@ module.exports = async function(req, res) {
 
         console.log(`Navigating to URL: ${navUrl} - START`);
         await page.goto(navUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-        await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+        // Reduced networkidle timeout for faster response (most content loads in 10s)
+        await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {
+          console.log('[Optimization] Network idle timeout - proceeding with available content');
+        });
         console.log('Navigation complete');
 
         console.log('Getting page title - START');
@@ -198,10 +246,10 @@ module.exports = async function(req, res) {
           // Allow iframes to attach (not necessarily visible)
           await page.waitForSelector('iframe', { timeout: 20000, state: 'attached' }).catch(() => {});
 
-          // Poll for a Greenhouse iframe by URL or DOM handle (reduced timeout)
+          // Poll for a Greenhouse iframe by URL or DOM handle (optimized timeout)
           console.log('Checking for Greenhouse iframes - START');
           const ghRegex = /greenhouse\.io|boards\.greenhouse\.io|job-boards\.greenhouse\.io/i;
-          const deadline = Date.now() + 3000; // Reduced from 25s to 3s
+          const deadline = Date.now() + 1000; // Optimized: 1s instead of 3s (most iframes load immediately)
           const ghId = (() => { try { return new URL(navUrl).searchParams.get('gh_jid'); } catch { return null; } })();
           console.log('Greenhouse detection URL param gh_jid:', ghId);
           while (!ghFrame && Date.now() < deadline) {
@@ -300,10 +348,10 @@ module.exports = async function(req, res) {
         console.log(`Extracted content length: ${job_body.length} characters`);
         console.log('Page HTML extracted successfully');
 
-        console.log('Closing browser - START');
+        console.log('Closing browser context - START');
         await context.close();
-        await browser.close();
-        console.log('Browser closed successfully');
+        // Don't close browser - keep it warm in the pool for next request
+        console.log('Browser context closed (browser kept warm)');
       } catch (error) {
         console.error('Browser error:', error);
         return res.status(500).json({ error: 'Failed to scrape URL', details: error.message });
