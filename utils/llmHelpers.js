@@ -18,12 +18,14 @@ async function callLLM(prompt, temperature = null, options = {}) {
     user = 'utils/llmHelpers',
     response_format,
     systemMessage = 'You are an expert in job posting analysis and improvement.',
-    seed
+    seed,
+    messagesOverride = false,
+    messages
   } = options || {};
 
   const params = {
     model,
-    messages: [
+    messages: messagesOverride && messages ? messages : [
       { role: 'system', content: systemMessage },
       { role: 'user', content: prompt }
     ],
@@ -40,6 +42,12 @@ async function callLLM(prompt, temperature = null, options = {}) {
 
   const maxAttempts = 3;
   let lastError;
+  
+  // Log model usage for performance monitoring
+  if (process.env.NODE_ENV !== 'production' || process.env.LOG_LLM_MODELS === '1') {
+    console.log(`[LLM] Using model: ${params.model} for ${user}`);
+  }
+  
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const response = await openai.chat.completions.create(params, { timeout: 20000 });
