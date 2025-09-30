@@ -39,19 +39,19 @@ if (process.env.NODE_ENV !== 'production' || process.env.LOG_LLM_MODELS === '1')
 }
 ```
 
-## Model Strategy
+## Model Strategy (Updated for GPT-5)
 
-### GPT-4o-mini (Fast & Cheap)
+### GPT-5-mini (Fast & Efficient)
 Used for **simple data extraction** tasks:
 - ✅ Location extraction (`llmExtractLocation`)
 - ✅ Compensation extraction (`llmExtractCompensation`)
 
-**Why**: These are structured extraction tasks with clear patterns. GPT-4o-mini is:
-- **10x faster** (~1-2s vs 5-8s per call)
-- **20x cheaper** ($0.00015 vs $0.003 per 1K input tokens)
+**Why**: These are structured extraction tasks with clear patterns. GPT-5-mini is:
+- **Faster** than GPT-5 for simple tasks
+- **Cost-efficient** for high-volume extractions
 - **Equally accurate** for structured data extraction
 
-### GPT-4o (Powerful & Accurate)
+### GPT-5 (Most Powerful)
 Used for **complex qualitative assessment**:
 - ✅ Clarity & Readability scoring (`scoreClarityReadability`)
 - ✅ Prompt Alignment scoring (`scorePromptAlignment`)
@@ -60,6 +60,7 @@ Used for **complex qualitative assessment**:
 - Writing quality and tone
 - Structural organization
 - Contextual appropriateness
+- GPT-5 provides best-in-class reasoning for these tasks
 
 ## Expected Performance Impact
 
