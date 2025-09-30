@@ -421,6 +421,7 @@ module.exports = async function(req, res) {
         userid: userId || null, // Explicitly set to null for anonymous users
         job_title,
         job_body,
+        job_url: url || null, // Save the original URL if provided
         feedback,
         total_score,
         categories,
@@ -458,6 +459,7 @@ module.exports = async function(req, res) {
       recommendations,
       job_title,
       job_body,
+      job_url: url || null, // Include URL in response
       feedback,
       saved_at: new Date().toISOString(),
       original_report: {}

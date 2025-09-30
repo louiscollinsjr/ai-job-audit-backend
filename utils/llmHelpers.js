@@ -20,7 +20,8 @@ async function callLLM(prompt, temperature = null, options = {}) {
     systemMessage = 'You are an expert in job posting analysis and improvement.',
     seed,
     messagesOverride = false,
-    messages
+    messages,
+    timeout = 20000 // Default 20 second timeout, can be overridden
   } = options || {};
 
   const params = {
@@ -33,8 +34,10 @@ async function callLLM(prompt, temperature = null, options = {}) {
     user
   };
   
-  // Only add temperature if it's explicitly provided and not null
-  if (temperature !== null) {
+  // Only add temperature if it's explicitly provided, not null, and model supports it
+  // Note: gpt-5 and gpt-5-mini models don't support custom temperature
+  const supportsTemperature = !model.includes('gpt-5');
+  if (temperature !== null && supportsTemperature) {
     params.temperature = temperature;
   }
   if (response_format) params.response_format = response_format;
@@ -48,7 +51,7 @@ async function callLLM(prompt, temperature = null, options = {}) {
   
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const response = await openai.chat.completions.create(params, { timeout: 20000 });
+      const response = await openai.chat.completions.create(params, { timeout });
       return response.choices[0].message.content;
     } catch (error) {
       lastError = error;
@@ -58,14 +61,16 @@ async function callLLM(prompt, temperature = null, options = {}) {
       // If model doesn't support custom temperature (only default=1), retry once without temperature
       const tempUnsupported = /Unsupported value: 'temperature'|Only the default \(1\) value is supported/i.test(message);
       if (tempUnsupported && params && Object.prototype.hasOwnProperty.call(params, 'temperature')) {
+        console.warn('LLM rejected custom temperature; retrying without temperature.');
+        const { temperature: _omit, ...safeParams } = params;
         try {
-          console.warn('LLM rejected custom temperature; retrying without temperature.');
-          const { temperature: _omit, ...safeParams } = params;
-          const response = await openai.chat.completions.create(safeParams, { timeout: 20000 });
+          const response = await openai.chat.completions.create(safeParams, { timeout });
           return response.choices[0].message.content;
         } catch (e2) {
+          // If retry without temperature also fails, throw that error
           lastError = e2;
-          // fall through to normal retry logic below
+          const e2Message = String((e2 && e2.message) || '');
+          throw new Error(`OpenAI API error: ${e2Message}`);
         }
       }
 

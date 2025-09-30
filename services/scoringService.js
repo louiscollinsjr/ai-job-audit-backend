@@ -300,7 +300,7 @@ async function scoreJob7Category(jobData) {
       scoreClarityReadability(jobData),
       scorePromptAlignment(jobData)
     ]),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('LLM analysis timeout after 45 seconds')), 45000))
+    new Promise((_, reject) => setTimeout(() => reject(new Error('LLM analysis timeout after 120 seconds')), 120000))
   ]);
 
   const structuredData = scoreStructuredDataPresence(jobData);

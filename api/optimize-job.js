@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { scoreJob7Category } = require('../services/scoringService');
+const { scoreJobEnhanced } = require('../services/scoringServiceV2');
 const { getJobPostingById } = require('../services/databaseService');
 const { callLLM } = require('../utils/llmHelpers');
 const { supabase } = require('../utils/supabase');
@@ -45,10 +46,24 @@ router.post('/', async (req, res) => {
     console.log('[DEBUG] optimize-job: Generating optimized text with LLM');
     const optimizationResult = await generateOptimizedJobPost(jobText, originalScore);
     
-    // 3. Re-score optimized version using 7-category scoring
-    console.log('[DEBUG] optimize-job: Scoring optimized text');
-    const optimizedAnalysis = await scoreJob7Category(optimizationResult.optimizedText, '');
-    const optimizedScore = optimizedAnalysis.totalScore;
+    // 3. Re-score optimized version using ENHANCED (V2) scoring - same as audit endpoint
+    console.log('[DEBUG] optimize-job: Scoring optimized text with V2 Enhanced scoring');
+    const optimizedJobData = {
+      job_title: originalReport.job_title || 'Job Posting',
+      job_body: optimizationResult.optimizedText,
+      job_html: '' // Optimized text is plain text, no HTML
+    };
+    const optimizedAnalysis = await scoreJobEnhanced(optimizedJobData);
+    console.log('[DEBUG] optimize-job: Full optimizedAnalysis object:', JSON.stringify(optimizedAnalysis, null, 2));
+    const optimizedScore = optimizedAnalysis.total_score; // Note: property is total_score, not totalScore
+    
+    console.log('[DEBUG] optimize-job: Optimized score calculated:', optimizedScore);
+    console.log('[DEBUG] optimize-job: Type of optimizedScore:', typeof optimizedScore);
+    
+    if (optimizedScore === undefined || optimizedScore === null) {
+      console.error('[ERROR] optimize-job: optimizedScore is undefined/null! Full analysis:', optimizedAnalysis);
+      throw new Error('Failed to calculate optimized score - score is undefined');
+    }
 
     // 4. Get latest version number for this report
     const { data: existingVersions, error: versionError } = await supabase
@@ -68,19 +83,29 @@ router.post('/', async (req, res) => {
 
     // 5. Save to optimizations table
     console.log('[DEBUG] optimize-job: Saving to optimizations table, version:', nextVersion);
+    const optimizationRecord = {
+      report_id: jobId,
+      version_number: nextVersion,
+      original_text_snapshot: jobText,
+      optimized_text: optimizationResult.optimizedText,
+      original_score: originalScore,
+      optimized_score: optimizedScore,
+      change_log: optimizationResult.changeLog,
+      unaddressed_items: optimizationResult.unaddressedItems,
+      created_at: new Date().toISOString()
+    };
+    
+    console.log('[DEBUG] optimize-job: Record to save:', JSON.stringify({
+      report_id: jobId,
+      version_number: nextVersion,
+      original_score: originalScore,
+      optimized_score: optimizedScore,
+      optimized_text_length: optimizationResult.optimizedText.length
+    }));
+    
     const { data: savedOptimization, error: saveError } = await supabase
       .from('optimizations')
-      .insert([{
-        report_id: jobId,
-        version_number: nextVersion,
-        original_text_snapshot: jobText,
-        optimized_text: optimizationResult.optimizedText,
-        original_score: originalScore,
-        optimized_score: optimizedScore,
-        change_log: optimizationResult.changeLog,
-        unaddressed_items: optimizationResult.unaddressedItems,
-        created_at: new Date().toISOString()
-      }])
+      .insert([optimizationRecord])
       .select()
       .single();
 
@@ -146,7 +171,14 @@ Provide your response in the following JSON format:
 Focus on high-impact improvements. Be specific in the change_log about what was improved.`;
 
   try {
-    const response = await callLLM(prompt, 'services/optimize-job', 0.7);
+    // Note: gpt-5 models don't support custom temperature, so we don't pass it
+    // Optimization requires longer timeout due to complex analysis
+    const response = await callLLM(prompt, null, { 
+      user: 'services/optimize-job',
+      systemMessage: 'You are an expert job posting optimizer. Analyze job postings and provide structured improvements in JSON format.',
+      response_format: { type: 'json_object' },
+      timeout: 90000 // 90 second timeout for optimization
+    });
     
     // Parse JSON response
     let parsed;
@@ -159,16 +191,27 @@ Focus on high-impact improvements. Be specific in the change_log about what was 
       console.error('[DEBUG] optimize-job: Failed to parse LLM response as JSON:', parseError);
       // Fallback: return original with minimal improvements
       return {
-        optimizedText: originalText,
         changeLog: ['Unable to generate optimizations - please try again'],
         unaddressedItems: []
       };
     }
 
+    // Ensure change_log and unaddressed_items are arrays
+    const changeLog = Array.isArray(parsed.change_log) 
+      ? parsed.change_log 
+      : (parsed.change_log ? [parsed.change_log] : []);
+    
+    const unaddressedItems = Array.isArray(parsed.unaddressed_items)
+      ? parsed.unaddressed_items
+      : (parsed.unaddressed_items ? [parsed.unaddressed_items] : []);
+    
+    console.log('[DEBUG] optimize-job: Parsed change_log:', changeLog);
+    console.log('[DEBUG] optimize-job: Parsed unaddressed_items:', unaddressedItems);
+    
     return {
       optimizedText: parsed.optimized_text || originalText,
-      changeLog: parsed.change_log || [],
-      unaddressedItems: parsed.unaddressed_items || []
+      changeLog: changeLog.filter(item => item !== null && item !== undefined),
+      unaddressedItems: unaddressedItems.filter(item => item !== null && item !== undefined)
     };
   } catch (error) {
     console.error('[DEBUG] optimize-job: Error generating optimized text:', error);
