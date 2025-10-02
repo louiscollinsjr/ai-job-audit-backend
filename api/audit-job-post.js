@@ -4,6 +4,8 @@ chromium.use(stealth);
 const { execSync } = require('child_process');
 const { supabase } = require('../utils/supabase');
 const { scoreJob7Category } = require('../services/scoringService');
+const milestoneEmitter = require('../utils/milestoneEmitter');
+const { v4: uuidv4 } = require('uuid');
 const { scoreJobEnhanced } = require('../services/scoringServiceV2');
 
 // Browser instance pooling for performance
@@ -91,7 +93,22 @@ module.exports = async function(req, res) {
   });
 
   // Your existing handler logic but with standard Playwright
-  const { url, text, useV2Pipeline = false } = req.body;
+  const { url, text, useV2Pipeline = false, sessionId: providedSessionId } = req.body;
+
+  const sessionId = providedSessionId || uuidv4();
+  milestoneEmitter.initSession(sessionId);
+  milestoneEmitter.emit(sessionId, {
+    type: 'pipeline',
+    step: 'Request Received',
+    status: 'started',
+    note: url ? 'URL analysis requested' : 'Text analysis requested'
+  });
+
+  res.on('finish', () => {
+    if (sessionId) {
+      milestoneEmitter.complete(sessionId);
+    }
+  });
   
   if (!url && !text) {
     return res.status(400).json({
@@ -123,6 +140,11 @@ module.exports = async function(req, res) {
         try {
           browser = await getOrCreateBrowser(launchArgs, headlessOpt);
           console.log('Browser ready (pooled or new)');
+          milestoneEmitter.emit(sessionId, {
+            type: 'pipeline',
+            step: 'Browser Setup',
+            status: 'complete'
+          });
         } catch (err) {
           console.log('Browser pool failed, trying fresh launch:', err.message);
           try {
@@ -183,6 +205,13 @@ module.exports = async function(req, res) {
         const page = await context.newPage();
         console.log('Creating new page - END');
 
+        milestoneEmitter.emit(sessionId, {
+          type: 'pipeline',
+          step: 'Navigation',
+          status: 'started',
+          note: `Loading ${navUrl}`
+        });
+
         // Normalize accidentally escaped query chars from shell (e.g., \?gh_jid\=...)
         let navUrl = url;
         try {
@@ -212,10 +241,22 @@ module.exports = async function(req, res) {
           console.log('[Optimization] Network idle timeout - proceeding with available content');
         });
         console.log('Navigation complete');
+        milestoneEmitter.emit(sessionId, {
+          type: 'pipeline',
+          step: 'Navigation',
+          status: 'complete'
+        });
 
         console.log('Getting page title - START');
         job_title = await page.title();
         console.log(`Page title: ${job_title}`);
+
+        milestoneEmitter.emit(sessionId, {
+          type: 'pipeline',
+          step: 'Content Extraction',
+          status: 'started',
+          note: 'Extracting job posting data'
+        });
 
         // Detect anti-bot/CF interstitials by title/body snippet
         const antiBotSignals = [
@@ -348,6 +389,13 @@ module.exports = async function(req, res) {
         console.log(`Extracted content length: ${job_body.length} characters`);
         console.log('Page HTML extracted successfully');
 
+        milestoneEmitter.emit(sessionId, {
+          type: 'pipeline',
+          step: 'Content Extraction',
+          status: 'complete',
+          note: job_body ? `Extracted ${job_body.split(' ').length} words` : 'No content extracted'
+        });
+
         console.log('Closing browser context - START');
         await context.close();
         // Don't close browser - keep it warm in the pool for next request
@@ -378,13 +426,20 @@ module.exports = async function(req, res) {
   try {
     const jobData = { job_title, job_body, job_html };
     
+    milestoneEmitter.emit(sessionId, {
+      type: 'pipeline',
+      step: 'Scoring Pipeline',
+      status: 'started',
+      note: 'Analyzing categories'
+    });
+
     let scoringResult;
     if (useV2Pipeline) {
       console.log('Routing request to ENHANCED (V2) scoring pipeline.');
-      scoringResult = await scoreJobEnhanced(jobData);
+      scoringResult = await scoreJobEnhanced(jobData, sessionId);
     } else {
       console.log('Routing request to STANDARD (V1) scoring pipeline.');
-      scoringResult = await scoreJob7Category(jobData);
+      scoringResult = await scoreJob7Category(jobData, sessionId);
     }
 
     const {
@@ -455,16 +510,35 @@ module.exports = async function(req, res) {
       id: reportId, // Include the database ID
       total_score,
       categories,
-      red_flags,
       recommendations,
+      red_flags,
+      feedback,
       job_title,
-      job_body,
+      sessionId
+    };
+
+    milestoneEmitter.emit(sessionId, {
+      type: 'pipeline',
+      step: 'Scoring Pipeline',
+      status: 'complete',
+      score: total_score,
+      maxScore: 100
+    });
+
+    milestoneEmitter.emit(sessionId, {
+      type: 'pipeline',
+      step: 'Report Generation',
+      status: reportId ? 'complete' : 'error',
+      note: reportId ? `Report saved (ID: ${reportId})` : 'Failed to persist report'
+    });
+
+    res.json({
+      ...response,
       job_url: url || null, // Include URL in response
       feedback,
       saved_at: new Date().toISOString(),
       original_report: {}
-    };
-    res.json(response);
+    });
   } catch (error) {
     console.error('Audit error:', error);
     res.status(500).json({ error: 'Failed to audit job posting', details: error.message });
