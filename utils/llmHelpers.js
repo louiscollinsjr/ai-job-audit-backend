@@ -1,5 +1,4 @@
 const OpenAI = require('openai');
-const milestoneEmitter = require('./milestoneEmitter');
 
 // Initialize OpenAI client
 const openai = new OpenAI({
@@ -88,69 +87,6 @@ async function callLLM(prompt, temperature = null, options = {}) {
   throw lastError;
 }
 
-async function callLLMWithExplanation(prompt, temperature = null, options = {}) {
-  const {
-    withExplanation = false,
-    milestoneSessionId = null,
-    milestoneStep = 'LLM Analysis',
-    milestoneType = 'ai_insight'
-  } = options || {};
-
-  if (withExplanation && milestoneSessionId) {
-    milestoneEmitter.initSession(milestoneSessionId);
-    milestoneEmitter.emit(milestoneSessionId, {
-      type: 'pipeline',
-      step: milestoneStep,
-      status: 'started',
-      phase: 'llm_call'
-    });
-  }
-
-  const response = await callLLM(prompt, temperature, options);
-
-  if (!withExplanation) {
-    if (milestoneSessionId) {
-      milestoneEmitter.emit(milestoneSessionId, {
-        type: 'pipeline',
-        step: milestoneStep,
-        status: 'complete'
-      });
-    }
-    return response;
-  }
-
-  try {
-    const parsed = typeof response === 'string' ? JSON.parse(response) : response;
-
-    if (parsed?.explanation && milestoneSessionId) {
-      milestoneEmitter.emit(milestoneSessionId, {
-        type: milestoneType,
-        ...parsed.explanation
-      });
-    }
-
-    if (milestoneSessionId) {
-      milestoneEmitter.emit(milestoneSessionId, {
-        type: 'pipeline',
-        step: milestoneStep,
-        status: 'complete'
-      });
-    }
-
-    return parsed;
-  } catch (error) {
-    if (milestoneSessionId) {
-      milestoneEmitter.emit(milestoneSessionId, {
-        type: 'error',
-        step: milestoneStep,
-        status: 'error',
-        note: `Failed to parse LLM response: ${error.message}`
-      });
-    }
-    throw error;
-  }
-}
-
 /**
  * Extract JSON from an LLM response
  * @param {string} response - The response from the LLM
@@ -193,6 +129,5 @@ function extractJsonFromResponse(response) {
 
 module.exports = {
   callLLM,
-  callLLMWithExplanation,
   extractJsonFromResponse
 };

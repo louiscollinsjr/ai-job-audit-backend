@@ -11,7 +11,6 @@ app.set('trust proxy', 1);
 
 // Import your API handlers
 const auditJobPost = require('./audit-job-post');
-const milestoneEmitter = require('../utils/milestoneEmitter');
 const analyzeJob = require('./analyze-job');
 const rewriteJob = require('./rewrite-job');
 const generateJsonLd = require('./generate-jsonld');
@@ -118,24 +117,6 @@ app.use('/api/v1/job', jobVersionsRouter);
 app.use('/api/v1/analyze-text', analyzeTextRouter);
 app.use('/api/v1/optimize-job', optimizeJobRouter);
 app.get('/api/v1/optimize-job/:id', getOptimizationRoute);
-
-// Milestone polling endpoint for frontend progress updates
-app.get('/api/milestones/:sessionId', (req, res) => {
-  const { sessionId } = req.params;
-  if (!sessionId) {
-    return res.status(400).json({ error: 'Missing sessionId' });
-  }
-
-  const sinceParam = req.query.since;
-  const since = typeof sinceParam === 'string' ? Number(sinceParam) : 0;
-  const normalizedSince = Number.isFinite(since) ? since : 0;
-  const milestones = milestoneEmitter.getMilestones(sessionId, normalizedSince);
-  const nextSince = milestones.length
-    ? milestones[milestones.length - 1].timestamp
-    : normalizedSince;
-
-  res.json({ milestones, nextSince });
-});
 
 // Debug all registered routes
 const routes = [];

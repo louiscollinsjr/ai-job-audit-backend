@@ -1,35 +1,13 @@
-const { callLLM, callLLMWithExplanation } = require('../utils/llmHelpers');
-const milestoneEmitter = require('../utils/milestoneEmitter');
-
-function emitMilestone(sessionId, payload) {
-  if (!sessionId) return;
-  milestoneEmitter.initSession(sessionId);
-  milestoneEmitter.emit(sessionId, payload);
-}
+const { callLLM } = require('../utils/llmHelpers');
 
 // 1. Clarity & Readability (20 pts)
-async function scoreClarityReadability({ job_title, job_body }, sessionId = null) {
-  emitMilestone(sessionId, {
-    type: 'pipeline',
-    step: 'Clarity & Readability',
-    status: 'started',
-    phase: 'preprocessing'
-  });
-
+async function scoreClarityReadability({ job_title, job_body }) {
   const sentences = job_body.match(/[^.!?]+[.!?]+/g) || [];
   const words = job_body.split(/\s+/).filter(w => /\w/.test(w));
   const avgLen = sentences.length ? (words.length / sentences.length) : words.length;
   const avgWordLen = words.length ? words.reduce((s, w) => s + w.length, 0) / words.length : 0;
   const unique = new Set(words.map(w => w.toLowerCase())).size;
   const ttr = words.length ? unique / words.length : 0;
-
-  emitMilestone(sessionId, {
-    type: 'pipeline',
-    step: 'Clarity & Readability',
-    status: 'in_progress',
-    phase: 'deterministic_analysis',
-    note: `Analyzed ${sentences.length} sentences / ${words.length} words`
-  });
 
   const sentenceLenScore = avgLen <= 16 ? 10 : avgLen <= 20 ? 8 : avgLen <= 24 ? 6 : avgLen <= 28 ? 4 : 2;
   const wordLenScore = avgWordLen <= 4.7 ? 10 : avgWordLen <= 5.2 ? 8 : avgWordLen <= 5.7 ? 6 : avgWordLen <= 6.2 ? 4 : 2;
@@ -45,48 +23,23 @@ async function scoreClarityReadability({ job_title, job_body }, sessionId = null
     .filter(Number.isFinite)
     .reduce((a, b) => a + b, 0) / 4 || 0;
 
-  const prompt = `Assess clarity of this job posting.
-Return EXACT JSON:
-{
-  "result": {
-    "title": { "score": 0-10, "suggestion": "string" },
-    "fluff": { "score": 0-10, "suggestion": "string" },
-    "readability": { "score": 0-10, "suggestion": "string" }
-  },
-  "explanation": {
-    "step": "Clarity & Readability",
-    "status": "complete|partial|not_found",
-    "note": "Short description of strongest signal",
-    "confidence": 0-100
-  }
-}
-Score strictly (10 best, 0 worst).
-Job Title: ${job_title}
-Job Body: ${job_body}`;
+  const prompt = `Assess this job posting for (a) title clarity, (b) fluff/buzzwords, (c) overall readability.
+Return EXACT JSON: {"title":{"score":0-10,"suggestion":"string"},"fluff":{"score":0-10,"suggestion":"string"},"readability":{"score":0-10,"suggestion":"string"}}.
+Score strictly, where 10 is best and 0 is worst.
+Job Title: ${job_title}\nJob Body: ${job_body}`;
 
-  let llmResult;
+  let llm;
   try {
-    const response = await callLLMWithExplanation(prompt, null, {
-      systemMessage: 'You are an expert AI job posting auditor. Output exactly one valid JSON object. No markdown, no backticks, no extra text.',
+    const response = await callLLM(prompt, null, {
+      systemMessage: 'You are an expert AI job posting auditor. Output exactly one valid JSON object. No markdown, no backticks, no explanations, no extra text.',
       response_format: { type: 'json_object' },
       user: 'services/scoringService/clarity',
-      seed: 1234,
-      withExplanation: true,
-      milestoneSessionId: sessionId,
-      milestoneStep: 'Clarity & Readability'
+      seed: 1234
     });
-    llmResult = response.result || response;
-  } catch (error) {
-    emitMilestone(sessionId, {
-      type: 'error',
-      step: 'Clarity & Readability',
-      status: 'error',
-      note: `LLM fallback used: ${error.message}`
-    });
-    llmResult = { title: { score: 5 }, fluff: { score: 5 }, readability: { score: 5 } };
+    llm = JSON.parse(response);
+  } catch {
+    llm = { title: { score: 5 }, fluff: { score: 5 }, readability: { score: 5 } };
   }
-
-  const llm = llmResult || { title: { score: 5 }, fluff: { score: 5 }, readability: { score: 5 } };
 
   const llmAvg = (llm.title.score + llm.fluff.score + llm.readability.score) / 3;
   const final0to10 = Math.max(0, Math.min(10, 0.5 * detAvg + 0.5 * llmAvg));
@@ -98,14 +51,6 @@ Job Body: ${job_body}`;
   if (ttr < 0.3) suggestions.push('Reduce repetition; vary wording.');
   if (ttr > 0.7) suggestions.push('Avoid excessive jargon; simplify language.');
 
-  emitMilestone(sessionId, {
-    type: 'pipeline',
-    step: 'Clarity & Readability',
-    status: 'complete',
-    score: Math.min(total, 20),
-    maxScore: 20
-  });
-
   return {
     score: Math.min(total, 20),
     maxScore: 20,
@@ -115,58 +60,26 @@ Job Body: ${job_body}`;
 }
 
 // 2. Prompt Alignment (20 pts)
-async function scorePromptAlignment({ job_title, job_body }, sessionId = null) {
-  emitMilestone(sessionId, {
-    type: 'pipeline',
-    step: 'Prompt Alignment',
-    status: 'started',
-    phase: 'llm_call'
-  });
-
+async function scorePromptAlignment({ job_title, job_body }) {
   const prompt = `Evaluate prompt alignment strictly on:
 1) Query Match: Would a candidate searching for this role (role + level + location) find this? Consider title specificity and whether key terms appear early in the body.
 2) Grouping: Are responsibilities/requirements/benefits clearly grouped under headings and bullet points?
 3) Structure: Natural, scannable flow suitable for search.
-Return EXACT JSON:
-{
-  "result": {
-    "query_match": { "score": 0-10, "suggestion": "string" },
-    "grouping": { "score": 0-10, "suggestion": "string" },
-    "structure": { "score": 0-10, "suggestion": "string" }
-  },
-  "explanation": {
-    "step": "Prompt Alignment",
-    "status": "complete|partial|not_found",
-    "note": "Highlight biggest alignment issue or win",
-    "confidence": 0-100
-  }
-}
-Job Title: ${job_title}
-Job Body: ${job_body}`;
+Return EXACT JSON: {"query_match":{"score":0-10,"suggestion":"string"},"grouping":{"score":0-10,"suggestion":"string"},"structure":{"score":0-10,"suggestion":"string"}}.
+Job Title: ${job_title}\nJob Body: ${job_body}`;
 
-  let llmResult;
+  let llm;
   try {
-    const response = await callLLMWithExplanation(prompt, null, {
-      systemMessage: 'You are an expert AI job posting auditor. Output exactly one valid JSON object. No markdown, no backticks, no extra text.',
+    const response = await callLLM(prompt, null, {
+      systemMessage: 'You are an expert AI job posting auditor. Output exactly one valid JSON object. No markdown, no backticks, no explanations, no extra text.',
       response_format: { type: 'json_object' },
       user: 'services/scoringService/prompt_alignment',
-      seed: 1234,
-      withExplanation: true,
-      milestoneSessionId: sessionId,
-      milestoneStep: 'Prompt Alignment'
+      seed: 1234
     });
-    llmResult = response.result || response;
-  } catch (error) {
-    emitMilestone(sessionId, {
-      type: 'error',
-      step: 'Prompt Alignment',
-      status: 'error',
-      note: `LLM fallback used: ${error.message}`
-    });
-    llmResult = { query_match: { score: 5 }, grouping: { score: 5 }, structure: { score: 5 } };
+    llm = JSON.parse(response);
+  } catch {
+    llm = { query_match: { score: 5 }, grouping: { score: 5 }, structure: { score: 5 } };
   }
-
-  const llm = llmResult || { query_match: { score: 5 }, grouping: { score: 5 }, structure: { score: 5 } };
 
   const hasSections = /(Responsibilities|Requirements|Qualifications|Benefits|Compensation)/i.test(job_body);
   const bodyWords = job_body.split(/\s+/).filter(Boolean);
@@ -187,14 +100,6 @@ Job Body: ${job_body}`;
   if (!hasSections) suggestions.push('Add clear sections (Responsibilities, Requirements, Benefits).');
   if (!(roleInTitle && locationInTitle)) suggestions.push('Include role, level, and location in the title.');
 
-  emitMilestone(sessionId, {
-    type: 'pipeline',
-    step: 'Prompt Alignment',
-    status: 'complete',
-    score: Math.min(total, 20),
-    maxScore: 20
-  });
-
   return {
     score: Math.min(total, 20),
     maxScore: 20,
@@ -204,28 +109,13 @@ Job Body: ${job_body}`;
 }
 
 // 3. Structured Data Presence (15 pts)
-function scoreStructuredDataPresence({ job_html }, sessionId = null) {
-  emitMilestone(sessionId, {
-    type: 'pipeline',
-    step: 'Structured Data',
-    status: 'started',
-    phase: 'parsing'
-  });
-
+function scoreStructuredDataPresence({ job_html }) {
   let score = 0;
   const suggestions = [];
   try {
     const matches = job_html ? [...job_html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/g)] : [];
     if (!matches.length) {
       suggestions.push('No schema.org/JobPosting JSON-LD found.');
-      emitMilestone(sessionId, {
-        type: 'pipeline',
-        step: 'Structured Data',
-        status: 'complete',
-        score,
-        maxScore: 15,
-        note: 'No JSON-LD detected'
-      });
       return { score, maxScore: 15, breakdown: {}, suggestions };
     }
     let jobJson = null;
@@ -242,14 +132,6 @@ function scoreStructuredDataPresence({ job_html }, sessionId = null) {
     }
     if (!jobJson) {
       suggestions.push('No JobPosting type found in JSON-LD.');
-      emitMilestone(sessionId, {
-        type: 'pipeline',
-        step: 'Structured Data',
-        status: 'complete',
-        score,
-        maxScore: 15,
-        note: 'JSON-LD present but missing JobPosting type'
-      });
       return { score, maxScore: 15, breakdown: {}, suggestions };
     }
     const required = ['title', 'datePosted', 'description', 'hiringOrganization', 'jobLocation'];
@@ -270,37 +152,15 @@ function scoreStructuredDataPresence({ job_html }, sessionId = null) {
     });
     score = Math.round((foundReq / required.length) * 12 + Math.min(foundOpt, 3));
     if (score < 15) suggestions.push('Complete schema.org/JobPosting JSON-LD with required/optional fields.');
-    emitMilestone(sessionId, {
-      type: 'pipeline',
-      step: 'Structured Data',
-      status: 'complete',
-      score,
-      maxScore: 15,
-      note: `Schema fields: ${foundReq} required, ${foundOpt} optional`
-    });
     return { score, maxScore: 15, breakdown: { foundRequired: foundReq, foundOptional: foundOpt }, suggestions };
   } catch {
     suggestions.push('Invalid or unparsable schema.org/JobPosting JSON-LD.');
-    emitMilestone(sessionId, {
-      type: 'pipeline',
-      step: 'Structured Data',
-      status: 'complete',
-      score,
-      maxScore: 15,
-      note: 'Schema parsing failed'
-    });
     return { score, maxScore: 15, breakdown: {}, suggestions };
   }
 }
 
 // 4. Recency & Freshness (10 pts)
-function scoreRecencyFreshness({ job_html, job_body }, sessionId = null) {
-  emitMilestone(sessionId, {
-    type: 'pipeline',
-    step: 'Recency & Freshness',
-    status: 'started'
-  });
-
+function scoreRecencyFreshness({ job_html, job_body }) {
   let score = 0;
   const suggestions = [];
   let date = null;
@@ -339,26 +199,11 @@ function scoreRecencyFreshness({ job_html, job_body }, sessionId = null) {
     suggestions.push('No reliable posting date found. Add datePosted or a visible posted date.');
   }
   if (/(hiring\s*now|immediate|start\s*ASAP)/i.test(job_body)) score = Math.min(10, score + 1);
-  const finalScore = Math.min(score, 10);
-  emitMilestone(sessionId, {
-    type: 'pipeline',
-    step: 'Recency & Freshness',
-    status: 'complete',
-    score: finalScore,
-    maxScore: 10,
-    note: date ? `Detected date ${date.toISOString().slice(0, 10)}` : 'No posting date detected'
-  });
-  return { score: finalScore, maxScore: 10, breakdown: { date }, suggestions };
+  return { score: Math.min(score, 10), maxScore: 10, breakdown: { date }, suggestions };
 }
 
 // 5. Keyword Targeting (15 pts)
-function scoreKeywordTargeting({ job_title, job_body }, sessionId = null) {
-  emitMilestone(sessionId, {
-    type: 'pipeline',
-    step: 'Keyword Targeting',
-    status: 'started'
-  });
-
+function scoreKeywordTargeting({ job_title, job_body }) {
   let score = 0;
   const suggestions = [];
   const text = (job_title + ' ' + job_body).toLowerCase();
@@ -394,27 +239,11 @@ function scoreKeywordTargeting({ job_title, job_body }, sessionId = null) {
   if (skillsCount === 0) suggestions.push('List concrete skills/technologies relevant to the role.');
   if (/(senior|junior|lead)/i.test(job_title) && roleRx.test(job_title)) score = Math.min(15, score + 1);
 
-  const finalScore = Math.min(score, 15);
-  emitMilestone(sessionId, {
-    type: 'pipeline',
-    step: 'Keyword Targeting',
-    status: 'complete',
-    score: finalScore,
-    maxScore: 15,
-    note: `Skills detected: ${skillsCount}`
-  });
-
-  return { score: finalScore, maxScore: 15, breakdown: { role, level, location, skillsCount, modality }, suggestions };
+  return { score: Math.min(score, 15), maxScore: 15, breakdown: { role, level, location, skillsCount, modality }, suggestions };
 }
 
 // 6. Compensation Transparency (10 pts)
-function scoreCompensationTransparency({ job_body }, sessionId = null) {
-  emitMilestone(sessionId, {
-    type: 'pipeline',
-    step: 'Compensation Transparency',
-    status: 'started'
-  });
-
+function scoreCompensationTransparency({ job_body }) {
   let score = 0;
   const suggestions = [];
   const text = job_body.toLowerCase();
@@ -440,26 +269,11 @@ function scoreCompensationTransparency({ job_body }, sessionId = null) {
   }
   if (!currency) suggestions.push('Include currency symbol or code (e.g., $, USD).');
 
-  emitMilestone(sessionId, {
-    type: 'pipeline',
-    step: 'Compensation Transparency',
-    status: 'complete',
-    score,
-    maxScore: 10,
-    note: range ? 'Salary range detected' : 'No salary range detected'
-  });
-
   return { score, maxScore: 10, breakdown: { hasRange: !!range, hasPeriod: period }, suggestions };
 }
 
 // 7. Page Context & Cleanliness (10 pts)
-function scorePageContextCleanliness({ job_html, job_body }, sessionId = null) {
-  emitMilestone(sessionId, {
-    type: 'pipeline',
-    step: 'Page Context',
-    status: 'started'
-  });
-
+function scorePageContextCleanliness({ job_html, job_body }) {
   let score = 0;
   const suggestions = [];
   const textLen = job_body.length;
@@ -475,41 +289,25 @@ function scorePageContextCleanliness({ job_html, job_body }, sessionId = null) {
   if (listScore < 2) suggestions.push('Use bullet points for responsibilities and requirements.');
   score = Math.min(10, ratioScore + headerScore + listScore);
 
-  emitMilestone(sessionId, {
-    type: 'pipeline',
-    step: 'Page Context',
-    status: 'complete',
-    score,
-    maxScore: 10,
-    note: `Headers: ${headers}, Lists: ${lists}`
-  });
-
   return { score, maxScore: 10, breakdown: { ratio, headers, lists, ratioScore, headerScore, listScore }, suggestions };
 }
 
-async function scoreJob7Category(jobData, sessionId = null) {
+async function scoreJob7Category(jobData) {
   const { job_title, job_body, job_html } = jobData;
-
-  emitMilestone(sessionId, {
-    type: 'pipeline',
-    step: 'Scoring Pipeline',
-    status: 'started',
-    note: 'Running 7-category analysis'
-  });
 
   const [clarity, promptAlignment] = await Promise.race([
     Promise.all([
-      scoreClarityReadability(jobData, sessionId),
-      scorePromptAlignment(jobData, sessionId)
+      scoreClarityReadability(jobData),
+      scorePromptAlignment(jobData)
     ]),
     new Promise((_, reject) => setTimeout(() => reject(new Error('LLM analysis timeout after 120 seconds')), 120000))
   ]);
 
-  const structuredData = scoreStructuredDataPresence(jobData, sessionId);
-  const recency = scoreRecencyFreshness(jobData, sessionId);
-  const keywordTargeting = scoreKeywordTargeting(jobData, sessionId);
-  const compensation = scoreCompensationTransparency(jobData, sessionId);
-  const pageContext = scorePageContextCleanliness(jobData, sessionId);
+  const structuredData = scoreStructuredDataPresence(jobData);
+  const recency = scoreRecencyFreshness(jobData);
+  const keywordTargeting = scoreKeywordTargeting(jobData);
+  const compensation = scoreCompensationTransparency(jobData);
+  const pageContext = scorePageContextCleanliness(jobData);
 
   const total_score =
     clarity.score + promptAlignment.score + structuredData.score +
@@ -538,14 +336,6 @@ async function scoreJob7Category(jobData, sessionId = null) {
   }
 
   const feedback = `This job posting scored ${total_score}/100. Key areas for improvement: ${recommendations.length ? recommendations.join('; ') : 'none'}.`;
-
-  emitMilestone(sessionId, {
-    type: 'pipeline',
-    step: 'Scoring Pipeline',
-    status: 'complete',
-    score: total_score,
-    maxScore: 100
-  });
 
   return {
     total_score,
