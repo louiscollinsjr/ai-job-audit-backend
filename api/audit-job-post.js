@@ -464,9 +464,14 @@ module.exports = async function(req, res) {
       saved_at: new Date().toISOString(),
       original_report: {}
     };
-    res.json(response);
+    return res.json(response);
   } catch (error) {
     console.error('Audit error:', error);
+    // Prevent double response if headers already sent
+    if (res.headersSent) {
+      console.error('Headers already sent, cannot send error response');
+      return;
+    }
     res.status(500).json({ error: 'Failed to audit job posting', details: error.message });
   }
 };

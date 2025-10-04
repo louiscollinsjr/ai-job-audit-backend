@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { callLLM } = require('../utils/llmHelpers');
 const {
   scoreClarityReadability,
@@ -10,6 +11,39 @@ const {
   scoreRecencyFreshness,
   scorePageContextCleanliness
 } = require('./scoringServiceEnhanced');
+
+// Simple in-memory cache for scoring results (LRU with max 100 entries)
+const scoringCache = new Map();
+const MAX_CACHE_SIZE = 100;
+const CACHE_TTL = 1000 * 60 * 30; // 30 minutes
+
+function getCacheKey(jobData) {
+  const content = JSON.stringify({
+    body: jobData.job_body,
+    html: jobData.job_html,
+    title: jobData.job_title
+  });
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+function getFromCache(key) {
+  const cached = scoringCache.get(key);
+  if (!cached) return null;
+  if (Date.now() - cached.timestamp > CACHE_TTL) {
+    scoringCache.delete(key);
+    return null;
+  }
+  return cached.data;
+}
+
+function setCache(key, data) {
+  // Simple LRU: if cache is full, remove oldest entry
+  if (scoringCache.size >= MAX_CACHE_SIZE) {
+    const firstKey = scoringCache.keys().next().value;
+    scoringCache.delete(firstKey);
+  }
+  scoringCache.set(key, { data, timestamp: Date.now() });
+}
 
 
 const US_STATE_ABBR = new Set([
@@ -152,6 +186,29 @@ ${job_body}`
   }
 }
 
+function calculateLocationConfidence(location, candidate) {
+  let confidence = 0;
+  
+  // City + State match is strong signal
+  if (location.city && location.state) confidence += 0.4;
+  // State abbreviation alone
+  else if (location.state) confidence += 0.2;
+  
+  // Modality flags
+  if (location.remote || location.hybrid || location.onsite) confidence += 0.2;
+  
+  // Country detected
+  if (location.country) confidence += 0.1;
+  
+  // Has candidate line
+  if (candidate) confidence += 0.1;
+  
+  // Jurisdiction match (pay transparency states)
+  if (location.jurisdictions && location.jurisdictions.length > 0) confidence += 0.2;
+  
+  return Math.min(1.0, confidence);
+}
+
 async function extractJobLocation(job_body = '') {
   const lines = job_body.split(/\r?\n/).map(line => normalizeWhitespace(line)).filter(Boolean);
   let candidate = null;
@@ -173,7 +230,8 @@ async function extractJobLocation(job_body = '') {
     country: null,
     remote: false,
     hybrid: false,
-    source: 'deterministic'
+    source: 'deterministic',
+    confidence: 0
   };
 
   if (candidate) {
@@ -200,7 +258,16 @@ async function extractJobLocation(job_body = '') {
     }
   }
 
-  if (!location.summary) {
+  // Calculate preliminary jurisdictions for confidence scoring
+  const prelimJurisdictions = computeJurisdictions(location);
+  location.jurisdictions = prelimJurisdictions;
+  
+  // Calculate confidence score
+  location.confidence = calculateLocationConfidence(location, candidate);
+  
+  // Only call LLM if confidence is below threshold (0.5)
+  if (location.confidence < 0.5 && !location.summary) {
+    console.log('[ScoringV2] Location confidence low, invoking LLM fallback');
     const llmResult = await llmExtractLocation(job_body);
     if (llmResult && llmResult.summary) {
       location = {
@@ -211,12 +278,17 @@ async function extractJobLocation(job_body = '') {
         country: llmResult.country || null,
         remote: !!llmResult.remote,
         hybrid: !!llmResult.hybrid,
-        source: 'llm'
+        source: 'llm',
+        confidence: 0.6 // Base LLM confidence
       };
+      location.jurisdictions = computeJurisdictions(location);
+      // Boost confidence if LLM provided complete data
+      if (location.city && location.state) location.confidence = 0.8;
     }
+  } else if (location.confidence >= 0.5) {
+    console.log(`[ScoringV2] Location confidence high (${location.confidence.toFixed(2)}), skipping LLM`);
   }
 
-  location.jurisdictions = computeJurisdictions(location);
   return location;
 }
 
@@ -259,6 +331,31 @@ ${job_body}`
   }
 }
 
+function calculateCompensationConfidence(compensation) {
+  let confidence = 0;
+  
+  // Range with both bounds is strongest signal
+  if (compensation.isRange && compensation.min && compensation.max) {
+    confidence += 0.4;
+    // Sanity check: max should be greater than min
+    if (compensation.max <= compensation.min) confidence -= 0.2;
+  } else if (compensation.amount !== null) {
+    confidence += 0.3;
+  }
+  
+  // Currency detected
+  if (compensation.currency) confidence += 0.2;
+  
+  // Pay period specified
+  if (compensation.payPeriod) confidence += 0.2;
+  
+  // No vague terms is good
+  if (!compensation.vagueTerms) confidence += 0.2;
+  else confidence -= 0.1;
+  
+  return Math.max(0, Math.min(1.0, confidence));
+}
+
 async function extractCompensationData(job_body = '', job_location_string = '') {
   const searchRegion = findCompensationLine(job_body) || job_body;
   
@@ -295,10 +392,16 @@ async function extractCompensationData(job_body = '', job_location_string = '') 
     includesEquity: /equity|stock/i.test(searchRegion),
     vagueTerms: VAGUE_COMP_TERMS.test(searchRegion) ? searchRegion.match(VAGUE_COMP_TERMS) : null,
     fallbackUsed: false,
-    locationContext: job_location_string
+    locationContext: job_location_string,
+    confidence: 0
   };
 
-  if (!compensation.min && compensation.amount === null) {
+  // Calculate confidence
+  compensation.confidence = calculateCompensationConfidence(compensation);
+
+  // Only call LLM if confidence is below threshold (0.5) and no amount found
+  if (compensation.confidence < 0.5 && !compensation.min && compensation.amount === null) {
+    console.log('[ScoringV2] Compensation confidence low, invoking LLM fallback');
     const llmResult = await llmExtractCompensation(job_body);
     if (llmResult) {
       compensation.source = 'llm';
@@ -312,7 +415,12 @@ async function extractCompensationData(job_body = '', job_location_string = '') 
       compensation.includesEquity = !!llmResult.includesEquity;
       compensation.includesBonus = !!llmResult.includesBonus;
       compensation.fallbackUsed = true;
+      // Recalculate confidence with LLM data
+      compensation.confidence = calculateCompensationConfidence(compensation);
+      if (compensation.confidence > 0) compensation.confidence = Math.max(0.6, compensation.confidence);
     }
+  } else if (compensation.confidence >= 0.5) {
+    console.log(`[ScoringV2] Compensation confidence high (${compensation.confidence.toFixed(2)}), skipping LLM`);
   }
 
   return compensation;
@@ -404,28 +512,33 @@ async function scoreCompensationAndCompliance(jobData) {
 async function scoreJobEnhanced(jobData) {
   console.log('[ScoringV2] Starting enhanced job analysis pipeline.');
 
+  // Check cache first
+  const cacheKey = getCacheKey(jobData);
+  const cached = getFromCache(cacheKey);
+  if (cached) {
+    console.log('[ScoringV2] Returning cached scoring result');
+    return cached;
+  }
+
   const job_location = await extractJobLocation(jobData.job_body);
   const enhancedJobData = { ...jobData, job_location };
   const locationLabel = job_location?.summary || job_location?.raw || 'Unknown';
-  console.log(`[ScoringV2] Extracted job location: ${locationLabel}`);
+  console.log(`[ScoringV2] Extracted job location: ${locationLabel} (confidence: ${job_location.confidence?.toFixed(2) || 'N/A'})`);
 
-  const [
-    clarity,
-    promptAlignment,
-    structuredData,
-    recency,
-    keywordTargeting,
-    pageContext,
-    compensation
-  ] = await Promise.all([
-    scoreClarityReadability(enhancedJobData),
-    scorePromptAlignment(enhancedJobData),
+  // Run deterministic scorers first (fast, no LLM calls)
+  console.log('[ScoringV2] Running deterministic scorers...');
+  const [structuredData, recency, keywordTargeting, pageContext] = await Promise.all([
     scoreStructuredDataPresence(enhancedJobData),
     scoreRecencyFreshness(enhancedJobData),
     scoreKeywordTargeting(enhancedJobData),
-    scorePageContextCleanliness(enhancedJobData),
-    scoreCompensationAndCompliance(enhancedJobData)
+    scorePageContextCleanliness(enhancedJobData)
   ]);
+
+  // Run LLM-dependent scorers sequentially to avoid rate limits
+  console.log('[ScoringV2] Running LLM-dependent scorers...');
+  const clarity = await scoreClarityReadability(enhancedJobData);
+  const promptAlignment = await scorePromptAlignment(enhancedJobData);
+  const compensation = await scoreCompensationAndCompliance(enhancedJobData);
 
   console.log('[ScoringV2] All scoring categories completed.');
 
@@ -472,7 +585,7 @@ async function scoreJobEnhanced(jobData) {
   const feedback = `This job posting scored ${total_score}/100 based on our enhanced analysis. `
     + `Key areas for improvement: ${recommendations.slice(0, 3).join('; ')}.`;
 
-  return {
+  const result = {
     total_score,
     feedback,
     recommendations,
@@ -480,6 +593,12 @@ async function scoreJobEnhanced(jobData) {
     categories,
     job_location: job_location || null
   };
+
+  // Cache the result
+  setCache(cacheKey, result);
+  console.log('[ScoringV2] Result cached for future use');
+
+  return result;
 }
 
 module.exports = {
