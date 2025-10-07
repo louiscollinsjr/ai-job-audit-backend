@@ -196,6 +196,33 @@ Focus on high-impact improvements. Be specific in the change_log about what was 
       };
     }
 
+    const normalizeText = value => {
+      if (value === null || value === undefined) return '';
+      if (typeof value === 'string') return value;
+      if (Array.isArray(value)) {
+        return value
+          .map(item => normalizeText(item))
+          .filter(Boolean)
+          .join('\n\n');
+      }
+      if (typeof value === 'object') {
+        if (typeof value.text === 'string') return value.text;
+        if (typeof value.content === 'string') return value.content;
+        return Object.values(value)
+          .map(item => normalizeText(item))
+          .filter(Boolean)
+          .join('\n\n');
+      }
+      return String(value);
+    };
+
+    const optimizedText = (() => {
+      const raw = parsed.optimized_text;
+      const normalized = normalizeText(raw);
+      const trimmed = normalized.trim();
+      return trimmed.length ? trimmed : originalText;
+    })();
+
     // Ensure change_log and unaddressed_items are arrays
     const changeLog = Array.isArray(parsed.change_log) 
       ? parsed.change_log 
@@ -209,9 +236,13 @@ Focus on high-impact improvements. Be specific in the change_log about what was 
     console.log('[DEBUG] optimize-job: Parsed unaddressed_items:', unaddressedItems);
     
     return {
-      optimizedText: parsed.optimized_text || originalText,
-      changeLog: changeLog.filter(item => item !== null && item !== undefined),
-      unaddressedItems: unaddressedItems.filter(item => item !== null && item !== undefined)
+      optimizedText,
+      changeLog: changeLog
+        .map(item => normalizeText(item).trim())
+        .filter(Boolean),
+      unaddressedItems: unaddressedItems
+        .map(item => normalizeText(item).trim())
+        .filter(Boolean)
     };
   } catch (error) {
     console.error('[DEBUG] optimize-job: Error generating optimized text:', error);
