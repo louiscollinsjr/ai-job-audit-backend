@@ -45,6 +45,14 @@ const {
   useResponsesAPI
 } = createLLMClient();
 
+const GROQ_MODEL_MAP = {
+  'gpt-4o-mini': 'llama-3.1-8b-instant',
+  'gpt-4o': 'llama-3.2-70b-versatile',
+  'gpt-4.1-mini': 'llama-3.1-8b-instant',
+  'gpt-5-mini': 'llama-3.1-8b-instant',
+  'gpt-5': 'llama-3.1-70b-versatile'
+};
+
 /**
  * Call the OpenAI API with a prompt
  * @param {string} prompt - The prompt to send to the API
@@ -63,6 +71,17 @@ async function callLLM(prompt, temperature = null, options = {}) {
     messages,
     timeout = 20000 // Default 20 second timeout, can be overridden
   } = options || {};
+
+  const requestedModel = model || defaultModel;
+  let effectiveModel = requestedModel;
+  if (llmProvider === 'groq') {
+    if (GROQ_MODEL_MAP[requestedModel]) {
+      effectiveModel = GROQ_MODEL_MAP[requestedModel];
+    } else if (/^gpt-/i.test(requestedModel)) {
+      console.warn(`[LLM] Provider groq does not support model ${requestedModel}; falling back to ${defaultModel}.`);
+      effectiveModel = defaultModel;
+    }
+  }
 
   const messageList = messagesOverride && messages ? messages : [
     { role: 'system', content: systemMessage },
@@ -85,7 +104,7 @@ async function callLLM(prompt, temperature = null, options = {}) {
     params.metadata = { caller: user };
   } else {
     params = {
-      model,
+      model: effectiveModel,
       messages: messageList,
       top_p,
       user
@@ -94,7 +113,7 @@ async function callLLM(prompt, temperature = null, options = {}) {
   
   // Only add temperature if it's explicitly provided, not null, and model supports it
   // Note: gpt-5 and gpt-5-mini models don't support custom temperature
-  const supportsTemperature = supportsTemperatureOverride && !model.includes('gpt-5');
+  const supportsTemperature = supportsTemperatureOverride && !requestedModel.includes('gpt-5');
   if (temperature !== null && supportsTemperature) {
     params.temperature = temperature;
   }
@@ -105,7 +124,7 @@ async function callLLM(prompt, temperature = null, options = {}) {
   let lastError;
   
   // Log model usage for performance monitoring (always enabled for optimization tracking)
-  console.log(`[LLM] Provider: ${llmProvider} | Model: ${params.model} | Caller: ${user}`);
+  console.log(`[LLM] Provider: ${llmProvider} | Model: ${params.model} | Requested: ${requestedModel} | Caller: ${user}`);
   
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
