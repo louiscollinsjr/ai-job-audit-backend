@@ -123,6 +123,7 @@ router.post('/', async (req, res) => {
       version_number: nextVersion,
       rewritten_text: optimizationResult.optimizedText,
       new_score: optimizedScore,
+      optimized_score: optimizedScore,
       original_score: originalScore,
       change_log: optimizationResult.changeLog,
       unaddressed_items: optimizationResult.unaddressedItems,
