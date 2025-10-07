@@ -240,7 +240,7 @@ async function scorePromptAlignment({ job_title, job_body }) {
 
 async function llmExtractLocation(job_body) {
   try {
-    return await runLLMJsonPrompt({
+    const raw = await runLLMJsonPrompt({
       task: 'job location summary with city, state, country, remote, hybrid flags',
       schema: {
         summary: {},
@@ -256,6 +256,57 @@ async function llmExtractLocation(job_body) {
       maxOutputTokens: 60,
       seed: 4321
     });
+    if (!raw || typeof raw !== 'object') return null;
+
+    const normalizeText = value => {
+      if (value === null || value === undefined) return null;
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        return trimmed.length ? trimmed : null;
+      }
+      if (typeof value === 'number') {
+        const text = String(value).trim();
+        return text.length ? text : null;
+      }
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          const normalized = normalizeText(item);
+          if (normalized) return normalized;
+        }
+        return null;
+      }
+      if (typeof value === 'object') {
+        if (typeof value.text === 'string') return normalizeText(value.text);
+        if (typeof value.value === 'string') return normalizeText(value.value);
+      }
+      return null;
+    };
+
+    const normalizeBoolean = value => {
+      if (value === null || value === undefined) return false;
+      if (typeof value === 'boolean') return value;
+      if (typeof value === 'number') return value !== 0;
+      if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (!normalized) return false;
+        return ['true', 'yes', 'remote', 'hybrid', 'onsite', 'on-site', 'on site', '1'].includes(normalized);
+      }
+      return false;
+    };
+
+    const result = {
+      summary: normalizeText(raw.summary),
+      city: normalizeText(raw.city),
+      state: normalizeText(raw.state),
+      country: normalizeText(raw.country),
+      remote: normalizeBoolean(raw.remote),
+      hybrid: normalizeBoolean(raw.hybrid)
+    };
+
+    if (result.state) result.state = result.state.toUpperCase();
+
+    const hasData = result.summary || result.city || result.state || result.country || result.remote || result.hybrid;
+    return hasData ? result : null;
   } catch (error) {
     console.warn('[ScoringV2] LLM location extraction failed:', error.message);
     return null;
