@@ -97,7 +97,7 @@ const timeoutMiddleware = (timeoutMs) => (req, res, next) => {
 };
 
 // Set up routes
-app.post('/api/audit-job-post', timeoutMiddleware(120000), expensiveRouteLimiter, auditJobPost);
+app.post('/api/audit-job-post', timeoutMiddleware(210000), expensiveRouteLimiter, auditJobPost);
 // Apply limiter before file upload to prevent unnecessary file processing
 app.post('/api/audit-job-file', expensiveRouteLimiter, upload.single('file'), auditJobPost);
 app.use('/api/analyze-job', analyzeJob);

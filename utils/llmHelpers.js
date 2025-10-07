@@ -1,9 +1,49 @@
 const OpenAI = require('openai');
 
-// Initialize OpenAI client
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || process.env.VITE_OPENAI,
-});
+function createLLMClient() {
+  const provider = (process.env.LLM_PROVIDER || 'openai').toLowerCase();
+
+  switch (provider) {
+    case 'groq': {
+      const apiKey = process.env.GROQ_API_KEY;
+      if (!apiKey) {
+        throw new Error('GROQ_API_KEY is required when LLM_PROVIDER=groq');
+      }
+      return {
+        provider,
+        client: new OpenAI({
+          apiKey,
+          baseURL: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1'
+        }),
+        defaultModel: process.env.GROQ_MODEL || 'llama-3.1-8b-instant',
+        supportsTemperatureOverride: true,
+        useResponsesAPI: true
+      };
+    }
+    case 'openai':
+    default: {
+      const apiKey = process.env.OPENAI_API_KEY || process.env.VITE_OPENAI;
+      if (!apiKey) {
+        throw new Error('OPENAI_API_KEY (or VITE_OPENAI) is required when LLM_PROVIDER=openai');
+      }
+      return {
+        provider: 'openai',
+        client: new OpenAI({ apiKey }),
+        defaultModel: process.env.OPENAI_CHAT_MODEL || 'gpt-5',
+        supportsTemperatureOverride: true,
+        useResponsesAPI: false
+      };
+    }
+  }
+}
+
+const {
+  client: llmClient,
+  provider: llmProvider,
+  defaultModel,
+  supportsTemperatureOverride,
+  useResponsesAPI
+} = createLLMClient();
 
 /**
  * Call the OpenAI API with a prompt
@@ -13,7 +53,7 @@ const openai = new OpenAI({
  */
 async function callLLM(prompt, temperature = null, options = {}) {
   const {
-    model = process.env.OPENAI_CHAT_MODEL || 'gpt-4o-mini',
+    model = defaultModel,
     top_p = 1,
     user = 'utils/llmHelpers',
     response_format,
@@ -24,19 +64,37 @@ async function callLLM(prompt, temperature = null, options = {}) {
     timeout = 20000 // Default 20 second timeout, can be overridden
   } = options || {};
 
-  const params = {
-    model,
-    messages: messagesOverride && messages ? messages : [
-      { role: 'system', content: systemMessage },
-      { role: 'user', content: prompt }
-    ],
-    top_p,
-    user
-  };
+  const messageList = messagesOverride && messages ? messages : [
+    { role: 'system', content: systemMessage },
+    { role: 'user', content: prompt }
+  ];
+
+  let params;
+  if (useResponsesAPI) {
+    const input = messageList.map(({ role, content }) => ({
+      role,
+      content: Array.isArray(content)
+        ? content
+        : [{ type: 'text', text: typeof content === 'string' ? content : JSON.stringify(content) }]
+    }));
+    params = {
+      model,
+      input
+    };
+    if (typeof top_p === 'number') params.top_p = top_p;
+    params.metadata = { caller: user };
+  } else {
+    params = {
+      model,
+      messages: messageList,
+      top_p,
+      user
+    };
+  }
   
   // Only add temperature if it's explicitly provided, not null, and model supports it
   // Note: gpt-5 and gpt-5-mini models don't support custom temperature
-  const supportsTemperature = !model.includes('gpt-5');
+  const supportsTemperature = supportsTemperatureOverride && !model.includes('gpt-5');
   if (temperature !== null && supportsTemperature) {
     params.temperature = temperature;
   }
@@ -47,12 +105,22 @@ async function callLLM(prompt, temperature = null, options = {}) {
   let lastError;
   
   // Log model usage for performance monitoring (always enabled for optimization tracking)
-  console.log(`[LLM] Using model: ${params.model} for ${user}`);
+  console.log(`[LLM] Provider: ${llmProvider} | Model: ${params.model} | Caller: ${user}`);
   
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const response = await openai.chat.completions.create(params, { timeout });
-      return response.choices[0].message.content;
+      if (useResponsesAPI) {
+        const response = await llmClient.responses.create(params, { timeout });
+        const output = response?.output_text
+          || response?.content?.map(part => part?.text || '').join('').trim();
+        if (!output) {
+          throw new Error('LLM provider returned an empty response');
+        }
+        return output;
+      }
+
+      const response = await llmClient.chat.completions.create(params, { timeout });
+      return response.choices?.[0]?.message?.content;
     } catch (error) {
       lastError = error;
       const status = (error && error.status) || (error && error.code) || 0;
@@ -64,13 +132,23 @@ async function callLLM(prompt, temperature = null, options = {}) {
         console.warn('LLM rejected custom temperature; retrying without temperature.');
         const { temperature: _omit, ...safeParams } = params;
         try {
-          const response = await openai.chat.completions.create(safeParams, { timeout });
-          return response.choices[0].message.content;
+          if (useResponsesAPI) {
+            const response = await llmClient.responses.create(safeParams, { timeout });
+            const output = response?.output_text
+              || response?.content?.map(part => part?.text || '').join('').trim();
+            if (!output) {
+              throw new Error('LLM provider returned an empty response');
+            }
+            return output;
+          }
+
+          const response = await llmClient.chat.completions.create(safeParams, { timeout });
+          return response.choices?.[0]?.message?.content;
         } catch (e2) {
           // If retry without temperature also fails, throw that error
           lastError = e2;
           const e2Message = String((e2 && e2.message) || '');
-          throw new Error(`OpenAI API error: ${e2Message}`);
+          throw new Error(`LLM provider API error: ${e2Message}`);
         }
       }
 
@@ -81,7 +159,7 @@ async function callLLM(prompt, temperature = null, options = {}) {
         await new Promise(r => setTimeout(r, backoffMs));
         continue;
       }
-      throw new Error(`OpenAI API error: ${error.message}`);
+      throw new Error(`LLM provider API error: ${error.message}`);
     }
   }
   throw lastError;

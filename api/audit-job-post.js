@@ -451,6 +451,11 @@ module.exports = async function(req, res) {
     }
     
     // Return response with ID if available
+    if (res.headersSent) {
+      console.error('Headers already sent before success response; aborting response dispatch.');
+      return;
+    }
+
     const response = {
       id: reportId, // Include the database ID
       total_score,
