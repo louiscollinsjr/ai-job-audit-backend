@@ -1,10 +1,6 @@
 const crypto = require('crypto');
 const { callLLM } = require('../utils/llmHelpers');
-const {
-  scoreClarityReadability,
-  scorePromptAlignment,
-  scoreKeywordTargeting
-} = require('./scoringService');
+const { scoreKeywordTargeting } = require('./scoringService');
 
 const {
   scoreStructuredDataPresence,
@@ -151,34 +147,159 @@ function computeJurisdictions(location) {
   return [...matches];
 }
 
+async function scoreClarityReadability({ job_title, job_body }) {
+  const sentences = job_body.match(/[^.!?]+[.!?]+/g) || [];
+  const words = job_body.split(/\s+/).filter(w => /\w/.test(w));
+  const avgLen = sentences.length ? (words.length / sentences.length) : words.length;
+  const avgWordLen = words.length ? words.reduce((s, w) => s + w.length, 0) / words.length : 0;
+  const unique = new Set(words.map(w => w.toLowerCase())).size;
+  const ttr = words.length ? unique / words.length : 0;
+
+  const sentenceLenScore = avgLen <= 16 ? 10 : avgLen <= 20 ? 8 : avgLen <= 24 ? 6 : avgLen <= 28 ? 4 : 2;
+  const wordLenScore = avgWordLen <= 4.7 ? 10 : avgWordLen <= 5.2 ? 8 : avgWordLen <= 5.7 ? 6 : avgWordLen <= 6.2 ? 4 : 2;
+  const ttrScore = Math.max(0, Math.min(10, 10 - Math.abs((ttr || 0) - 0.5) * 20));
+
+  const stop = new Set(['the','a','an','and','or','for','with','to','of','in','on','at','by','from','as','is','are','be','we']);
+  const titleTokens = (job_title || '').toLowerCase().split(/[^a-z0-9]+/).filter(t => t && !stop.has(t));
+  const first200 = words.slice(0, 200).map(w => w.toLowerCase());
+  const titleCovered = titleTokens.length ? titleTokens.filter(t => first200.includes(t)).length / titleTokens.length : 0;
+  const titleOverlapScore = Math.round(Math.max(0, Math.min(10, titleCovered * 10)));
+
+  const detAvg = [sentenceLenScore, wordLenScore, ttrScore, titleOverlapScore]
+    .filter(Number.isFinite)
+    .reduce((a, b) => a + b, 0) / 4 || 0;
+
+  const prompt = `
+JSON only.
+Rate title clarity, buzzwords/fluff, and readability (0–10, 10=best).
+Include short suggestions.
+
+Format:
+{"title":{"score":#,"suggestion":""},"fluff":{"score":#,"suggestion":""},"readability":{"score":#,"suggestion":""}}
+
+Title: "${job_title}"
+Body: "${job_body}"
+`;
+
+  let llm;
+  try {
+    const response = await callLLM(prompt, null, {
+      systemMessage: 'Expert job post auditor. Output only valid JSON object.',
+      response_format: { type: 'json_object' },
+      user: 'services/scoringServiceV2/clarity',
+      seed: 1234,
+      temperature: 0,
+      max_output_tokens: 80
+    });
+    llm = JSON.parse(response);
+  } catch {
+    llm = { title: { score: 5 }, fluff: { score: 5 }, readability: { score: 5 } };
+  }
+
+  const llmAvg = (llm.title.score + llm.fluff.score + llm.readability.score) / 3;
+  const final0to10 = Math.max(0, Math.min(10, 0.5 * detAvg + 0.5 * llmAvg));
+  const total = Math.round(final0to10 * 2);
+
+  const suggestions = [llm.title?.suggestion, llm.fluff?.suggestion, llm.readability?.suggestion]
+    .filter(Boolean);
+  if (avgLen > 28) suggestions.push('Shorten sentences to improve readability (target < 20 words avg).');
+  if (titleCovered < 0.5 && titleTokens.length) suggestions.push('Include key title terms in the opening paragraph.');
+  if (ttr < 0.3) suggestions.push('Reduce repetition; vary wording.');
+  if (ttr > 0.7) suggestions.push('Avoid excessive jargon; simplify language.');
+
+  return {
+    score: Math.min(total, 20),
+    maxScore: 20,
+    breakdown: { title: llm.title.score, fluff: llm.fluff.score, readability: llm.readability.score, sentenceLenScore, wordLenScore, ttrScore, titleOverlapScore },
+    suggestions
+  };
+}
+
+async function scorePromptAlignment({ job_title, job_body }) {
+  const prompt = `
+JSON only.
+Rate (0–10, 10=best):
+- query_match: title & early keyword alignment (role, level, location)
+- grouping: clear section headers & bullets
+- structure: logical flow
+
+Format:
+{"query_match":{"score":#,"suggestion":""},"grouping":{"score":#,"suggestion":""},"structure":{"score":#,"suggestion":""}}
+
+Title: "${job_title}"
+Body: "${job_body}"
+`;
+
+  let llm;
+  try {
+    const response = await callLLM(prompt, null, {
+      systemMessage: 'Expert job post auditor. Output only valid JSON object.',
+      response_format: { type: 'json_object' },
+      user: 'services/scoringServiceV2/prompt_alignment',
+      seed: 1234,
+      temperature: 0,
+      max_output_tokens: 80
+    });
+    llm = JSON.parse(response);
+  } catch {
+    llm = { query_match: { score: 5 }, grouping: { score: 5 }, structure: { score: 5 } };
+  }
+
+  const hasSections = /(Responsibilities|Requirements|Qualifications|Benefits|Compensation)/i.test(job_body);
+  const bodyWords = job_body.split(/\s+/).filter(Boolean);
+  const first100 = bodyWords.slice(0, 100).join(' ').toLowerCase();
+  const roleInTitle = /(engineer|developer|designer|manager|analyst|lead|director|scientist)/i.test(job_title);
+  const locationInTitle = /(remote|hybrid|onsite|[A-Z][a-z]+,?\s?[A-Z]{2})/.test(job_title);
+  const earlyPresence = /(remote|hybrid|onsite|responsibilit|requirement|qualification)/i.test(first100);
+  let detBonus = 0;
+  if (hasSections) detBonus += 1;
+  if (roleInTitle && locationInTitle) detBonus += 1;
+  if (earlyPresence) detBonus += 1;
+  if (!hasSections) detBonus -= 1;
+
+  const llmAvg = (llm.query_match.score + llm.grouping.score + llm.structure.score) / 3;
+  const adjusted = Math.max(0, Math.min(10, llmAvg + Math.max(-2, Math.min(2, detBonus))));
+  const total = Math.round(adjusted * 2);
+
+  const suggestions = [llm.query_match?.suggestion, llm.grouping?.suggestion, llm.structure?.suggestion].filter(Boolean);
+  if (!hasSections) suggestions.push('Add clear sections (Responsibilities, Requirements, Benefits).');
+  if (!(roleInTitle && locationInTitle)) suggestions.push('Include role, level, and location in the title.');
+
+  return {
+    score: Math.min(total, 20),
+    maxScore: 20,
+    breakdown: { queryMatch: llm.query_match.score, grouping: llm.grouping.score, structure: llm.structure.score, detBonus },
+    suggestions
+  };
+}
+
 async function llmExtractLocation(job_body) {
   try {
-    const response = await callLLM(
-      'Extract the primary job location from this posting. '
-        + 'Return JSON: {"summary":string,"city":string|null,"state":string|null,"country":string|null,'
-        + '"remote":boolean,"hybrid":boolean}. If unknown, summary="Unknown".',
-      null,
-      {
-        model: 'gpt-5-mini', // Use mini for simple extraction (faster, maintains accuracy)
-        systemMessage: 'You are a data extraction assistant. Output a single JSON object.',
-        response_format: { type: 'json_object' },
-        user: 'services/scoringServiceV2/location',
-        seed: 4321,
-        messagesOverride: true,
-        // Custom handler: we need to pass both system and user content, so use messagesOverride
-        messages: [
-          { role: 'system', content: 'You are a data extraction assistant. Output a single JSON object.' },
-          {
-            role: 'user',
-            content: `Extract the primary job location from the following job posting.
-Return JSON with keys: summary (string), city (string|null), state (string|null), country (string|null), remote (boolean), hybrid (boolean).
-If any field is unknown, use null.
+    const response = await callLLM('', null, {
+      model: 'gpt-5-mini',
+      response_format: { type: 'json_object' },
+      user: 'services/scoringServiceV2/location',
+      seed: 4321,
+      temperature: 0,
+      max_output_tokens: 60,
+      stop: ['}'],
+      messagesOverride: true,
+      messages: [
+        {
+          role: 'system',
+          content: 'You extract job location info. Respond with one JSON object only.'
+        },
+        {
+          role: 'user',
+          content: `Return JSON:
+{"summary":string,"city":string|null,"state":string|null,"country":string|null,"remote":boolean,"hybrid":boolean}
+
 Job posting:
-${job_body}`
-          }
-        ]
-      }
-    );
+${job_body}
+`
+        }
+      ]
+    });
     return JSON.parse(response);
   } catch (error) {
     console.warn('[ScoringV2] LLM location extraction failed:', error.message);
@@ -299,31 +420,32 @@ function findCompensationLine(job_body) {
 
 async function llmExtractCompensation(job_body) {
   try {
-    const response = await callLLM(
-      'Extract salary compensation data as JSON.',
-      null,
-      {
-        model: 'gpt-5-mini', // Use mini for extraction (faster, critical for compensation accuracy)
-        systemMessage: 'You are a data extraction assistant. Output a single JSON object.',
-        response_format: { type: 'json_object' },
-        user: 'services/scoringServiceV2/compensation',
-        seed: 8765,
-        messagesOverride: true,
-        messages: [
-          { role: 'system', content: 'You are a data extraction assistant. Output a single JSON object.' },
-          {
-            role: 'user',
-            content: `Extract compensation information from the following job posting.
-Return JSON with keys: salaryText (string|null), currency (string|null),
-minValue (number|null), maxValue (number|null), payFrequency (string|null),
-isRange (boolean), includesEquity (boolean), includesBonus (boolean).
-Use null if unknown. Be thorough - check entire posting for salary information.
+    const response = await callLLM('', null, {
+      model: 'gpt-5-mini',
+      response_format: { type: 'json_object' },
+      user: 'services/scoringServiceV2/compensation',
+      seed: 8765,
+      temperature: 0,
+      max_output_tokens: 80,
+      stop: ['}'],
+      messagesOverride: true,
+      messages: [
+        {
+          role: 'system',
+          content: 'You extract compensation info. Respond with one JSON object only.'
+        },
+        {
+          role: 'user',
+          content: `Return JSON:
+{"salaryText":string|null,"currency":string|null,"minValue":number|null,"maxValue":number|null,
+"payFrequency":string|null,"isRange":boolean,"includesEquity":boolean,"includesBonus":boolean}
+
 Job posting:
-${job_body}`
-          }
-        ]
-      }
-    );
+${job_body}
+`
+        }
+      ]
+    });
     return JSON.parse(response);
   } catch (error) {
     console.warn('[ScoringV2] LLM compensation extraction failed:', error.message);
