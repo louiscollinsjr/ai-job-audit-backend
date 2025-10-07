@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { callLLM } = require('../utils/llmHelpers');
+const { runLLMJsonPrompt } = require('../utils/llmPromptHelper');
 const { scoreKeywordTargeting } = require('./scoringService');
 
 const {
@@ -169,32 +170,15 @@ async function scoreClarityReadability({ job_title, job_body }) {
     .filter(Number.isFinite)
     .reduce((a, b) => a + b, 0) / 4 || 0;
 
-  const prompt = `
-JSON only.
-Rate title clarity, buzzwords/fluff, and readability (0–10, 10=best).
-Include short suggestions.
-
-Format:
-{"title":{"score":#,"suggestion":""},"fluff":{"score":#,"suggestion":""},"readability":{"score":#,"suggestion":""}}
-
-Title: "${job_title}"
-Body: "${job_body}"
-`;
-
-  let llm;
-  try {
-    const response = await callLLM(prompt, null, {
-      systemMessage: 'Expert job post auditor. Output only valid JSON object.',
-      response_format: { type: 'json_object' },
-      user: 'services/scoringServiceV2/clarity',
-      seed: 1234,
-      temperature: 0,
-      max_output_tokens: 80
-    });
-    llm = JSON.parse(response);
-  } catch {
-    llm = { title: { score: 5 }, fluff: { score: 5 }, readability: { score: 5 } };
-  }
+  const llm = await runLLMJsonPrompt({
+    task: 'title clarity, buzzwords/fluff, and readability',
+    schema: { title: {}, fluff: {}, readability: {} },
+    job_title,
+    job_body,
+    userTag: 'services/scoringServiceV2/clarity',
+    maxOutputTokens: 80,
+    seed: 1234
+  });
 
   const llmAvg = (llm.title.score + llm.fluff.score + llm.readability.score) / 3;
   const final0to10 = Math.max(0, Math.min(10, 0.5 * detAvg + 0.5 * llmAvg));
@@ -216,34 +200,15 @@ Body: "${job_body}"
 }
 
 async function scorePromptAlignment({ job_title, job_body }) {
-  const prompt = `
-JSON only.
-Rate (0–10, 10=best):
-- query_match: title & early keyword alignment (role, level, location)
-- grouping: clear section headers & bullets
-- structure: logical flow
-
-Format:
-{"query_match":{"score":#,"suggestion":""},"grouping":{"score":#,"suggestion":""},"structure":{"score":#,"suggestion":""}}
-
-Title: "${job_title}"
-Body: "${job_body}"
-`;
-
-  let llm;
-  try {
-    const response = await callLLM(prompt, null, {
-      systemMessage: 'Expert job post auditor. Output only valid JSON object.',
-      response_format: { type: 'json_object' },
-      user: 'services/scoringServiceV2/prompt_alignment',
-      seed: 1234,
-      temperature: 0,
-      max_output_tokens: 80
-    });
-    llm = JSON.parse(response);
-  } catch {
-    llm = { query_match: { score: 5 }, grouping: { score: 5 }, structure: { score: 5 } };
-  }
+  const llm = await runLLMJsonPrompt({
+    task: 'query_match, grouping, and structure for alignment and scannability',
+    schema: { query_match: {}, grouping: {}, structure: {} },
+    job_title,
+    job_body,
+    userTag: 'services/scoringServiceV2/prompt_alignment',
+    maxOutputTokens: 80,
+    seed: 1234
+  });
 
   const hasSections = /(Responsibilities|Requirements|Qualifications|Benefits|Compensation)/i.test(job_body);
   const bodyWords = job_body.split(/\s+/).filter(Boolean);
@@ -275,32 +240,22 @@ Body: "${job_body}"
 
 async function llmExtractLocation(job_body) {
   try {
-    const response = await callLLM('', null, {
-      model: 'gpt-5-mini',
-      response_format: { type: 'json_object' },
-      user: 'services/scoringServiceV2/location',
-      seed: 4321,
-      temperature: 0,
-      max_output_tokens: 60,
-      stop: ['}'],
-      messagesOverride: true,
-      messages: [
-        {
-          role: 'system',
-          content: 'You extract job location info. Respond with one JSON object only.'
-        },
-        {
-          role: 'user',
-          content: `Return JSON:
-{"summary":string,"city":string|null,"state":string|null,"country":string|null,"remote":boolean,"hybrid":boolean}
-
-Job posting:
-${job_body}
-`
-        }
-      ]
+    return await runLLMJsonPrompt({
+      task: 'job location summary with city, state, country, remote, hybrid flags',
+      schema: {
+        summary: {},
+        city: {},
+        state: {},
+        country: {},
+        remote: {},
+        hybrid: {}
+      },
+      job_title: '',
+      job_body,
+      userTag: 'services/scoringServiceV2/location',
+      maxOutputTokens: 60,
+      seed: 4321
     });
-    return JSON.parse(response);
   } catch (error) {
     console.warn('[ScoringV2] LLM location extraction failed:', error.message);
     return null;
@@ -420,33 +375,24 @@ function findCompensationLine(job_body) {
 
 async function llmExtractCompensation(job_body) {
   try {
-    const response = await callLLM('', null, {
-      model: 'gpt-5-mini',
-      response_format: { type: 'json_object' },
-      user: 'services/scoringServiceV2/compensation',
-      seed: 8765,
-      temperature: 0,
-      max_output_tokens: 80,
-      stop: ['}'],
-      messagesOverride: true,
-      messages: [
-        {
-          role: 'system',
-          content: 'You extract compensation info. Respond with one JSON object only.'
-        },
-        {
-          role: 'user',
-          content: `Return JSON:
-{"salaryText":string|null,"currency":string|null,"minValue":number|null,"maxValue":number|null,
-"payFrequency":string|null,"isRange":boolean,"includesEquity":boolean,"includesBonus":boolean}
-
-Job posting:
-${job_body}
-`
-        }
-      ]
+    return await runLLMJsonPrompt({
+      task: 'compensation details with salary text, currency, min/max, frequency, range and perks',
+      schema: {
+        salaryText: {},
+        currency: {},
+        minValue: {},
+        maxValue: {},
+        payFrequency: {},
+        isRange: {},
+        includesEquity: {},
+        includesBonus: {}
+      },
+      job_title: '',
+      job_body,
+      userTag: 'services/scoringServiceV2/compensation',
+      maxOutputTokens: 80,
+      seed: 8765
     });
-    return JSON.parse(response);
   } catch (error) {
     console.warn('[ScoringV2] LLM compensation extraction failed:', error.message);
     return null;
