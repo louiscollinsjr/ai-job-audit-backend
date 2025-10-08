@@ -179,7 +179,7 @@ Think through the improvements silently, then output **only the final JSON objec
       user: 'services/optimize-job',
       systemMessage: 'Professional job posting optimizer. Respond with one JSON object containing the Markdown rewrite and supporting arrays.',
       response_format: { type: 'json_object' },
-      model: 'llama-3.1-70b-versatile',
+      model: 'llama-3.3-70b-versatile',
       temperature: 0.6,
       top_p: 0.7,
       max_output_tokens: 900,
