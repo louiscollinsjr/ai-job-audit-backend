@@ -178,9 +178,14 @@ async function scoreClarityReadability({ job_title, job_body }) {
     userTag: 'services/scoringServiceV2/clarity',
     maxOutputTokens: 80,
     seed: 1234
-  });
+  }) || {};
 
-  const llmAvg = (llm.title.score + llm.fluff.score + llm.readability.score) / 3;
+  const safeScore = section => (section && Number.isFinite(section.score)) ? section.score : 0;
+  const titleScore = safeScore(llm.title);
+  const fluffScore = safeScore(llm.fluff);
+  const readabilityScore = safeScore(llm.readability);
+
+  const llmAvg = (titleScore + fluffScore + readabilityScore) / 3;
   const final0to10 = Math.max(0, Math.min(10, 0.5 * detAvg + 0.5 * llmAvg));
   const total = Math.round(final0to10 * 2);
 
@@ -194,7 +199,7 @@ async function scoreClarityReadability({ job_title, job_body }) {
   return {
     score: Math.min(total, 20),
     maxScore: 20,
-    breakdown: { title: llm.title.score, fluff: llm.fluff.score, readability: llm.readability.score, sentenceLenScore, wordLenScore, ttrScore, titleOverlapScore },
+    breakdown: { title: titleScore, fluff: fluffScore, readability: readabilityScore, sentenceLenScore, wordLenScore, ttrScore, titleOverlapScore },
     suggestions
   };
 }
