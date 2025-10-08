@@ -175,16 +175,30 @@ Think through the improvements silently, then output **only the final JSON objec
   try {
     // Note: gpt-5 models don't support custom temperature, so we don't pass it
     // Optimization requires longer timeout due to complex analysis
-    const response = await callLLM(prompt, null, { 
-      user: 'services/optimize-job',
-      systemMessage: 'Professional job posting optimizer. Respond with one JSON object containing the Markdown rewrite and supporting arrays.',
-      response_format: { type: 'json_object' },
-      model: 'llama-3.3-70b-versatile',
-      temperature: 0.6,
-      top_p: 0.7,
-      max_output_tokens: 900,
-      timeout: 90000 // 90 second timeout for optimization
-    });
+    let response;
+    try {
+      response = await callLLM(prompt, null, { 
+        user: 'services/optimize-job',
+        systemMessage: 'Professional job posting optimizer. Respond with one JSON object containing the Markdown rewrite and supporting arrays.',
+        response_format: { type: 'json_object' },
+        model: 'llama-3.3-70b-versatile',
+        temperature: 0.6,
+        top_p: 0.7,
+        max_output_tokens: 900,
+        timeout: 90000 // 90 second timeout for optimization
+      });
+    } catch (jsonError) {
+      console.warn('[optimize-job] JSON response_format failed, retrying without constraint:', jsonError?.message);
+      response = await callLLM(prompt, null, { 
+        user: 'services/optimize-job',
+        systemMessage: 'Professional job posting optimizer. Respond with one JSON object containing the Markdown rewrite and supporting arrays.',
+        model: 'llama-3.3-70b-versatile',
+        temperature: 0.6,
+        top_p: 0.7,
+        max_output_tokens: 900,
+        timeout: 90000
+      });
+    }
     
     // Parse JSON response
     let parsed;
