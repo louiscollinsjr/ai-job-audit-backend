@@ -142,42 +142,47 @@ router.post('/', async (req, res) => {
  * Generate optimized job posting with tracked improvements
  */
 async function generateOptimizedJobPost(originalText, originalScore) {
-  const prompt = `You are an expert job posting optimizer. Analyze and improve the following job posting to maximize its score across these categories:
+  const prompt = `You are an **expert job posting optimizer and copy editor**. Your objective is to rewrite the job posting so it can achieve a **100/100 score** across clarity, structure, data completeness, keyword coverage, compensation transparency, and formatting.
 
-1. **Clarity & Readability** (20 points): Use clear language, short sentences, avoid jargon
-2. **Prompt Alignment** (20 points): Well-structured with clear sections (Responsibilities, Requirements, Benefits)
-3. **Structured Data** (15 points): Include all key details that can be structured (title, location, employment type, etc.)
-4. **Recency** (10 points): Add urgency indicators if appropriate
-5. **Keyword Targeting** (15 points): Include role keywords, level, location, employment type, and relevant skills
-6. **Compensation Transparency** (10 points): Provide clear salary range and benefits
-7. **Page Context** (10 points): Use proper formatting with headers and bullet lists
+### Output expectations
+- Deliver a **complete rewritten job posting**, never a summary.
+- Preserve roughly the same length as the original (longer if key details are missing).
+- Use **Markdown formatting** throughout:
+  - \`##\` section headings (Responsibilities, Requirements, Benefits, etc.)
+  - Bullet lists where appropriate
+  - Bold important terms, job title, and compensation details
+- Maintain a professional, inclusive tone while keeping all factual information accurate.
+
+### Return format (JSON only)
+{
+  "optimized_text": "Full improved posting in Markdown",
+  "change_log": ["Specific, measurable improvements"],
+  "unaddressed_items": ["Clarifications still needed"]
+}
+
+### Example snippet for optimized_text
+"optimized_text": "## About the Role\\nJoin our **Senior Data Engineer** team...\\n\\n## Responsibilities\\n- Build scalable data pipelines..."
+
+---
 
 Current Score: ${originalScore}/100
 
 Original Job Posting:
 ${originalText}
 
-Provide your response in the following JSON format:
-{
-  "optimized_text": "The improved job posting text here",
-  "change_log": [
-    "Specific improvement 1",
-    "Specific improvement 2"
-  ],
-  "unaddressed_items": [
-    "Issue that couldn't be addressed without more information"
-  ]
-}
-
-Focus on high-impact improvements. Be specific in the change_log about what was improved.`;
+Think through the improvements silently, then output **only the final JSON object**.`;
 
   try {
     // Note: gpt-5 models don't support custom temperature, so we don't pass it
     // Optimization requires longer timeout due to complex analysis
     const response = await callLLM(prompt, null, { 
       user: 'services/optimize-job',
-      systemMessage: 'You are an expert job posting optimizer. Analyze job postings and provide structured improvements in JSON format.',
+      systemMessage: 'Professional job posting optimizer. Respond with one JSON object containing the Markdown rewrite and supporting arrays.',
       response_format: { type: 'json_object' },
+      model: 'llama-3.1-70b-versatile',
+      temperature: 0.6,
+      top_p: 0.7,
+      max_output_tokens: 900,
       timeout: 90000 // 90 second timeout for optimization
     });
     

@@ -53,7 +53,7 @@ const GROQ_MODEL_MAP = {
   'gpt-4.1-mini': 'llama-3.1-8b-instant',
   'gpt-4.1': 'llama-3.1-70b-versatile',
   'gpt-5-mini': 'llama-3.1-8b-instant',
-  'gpt-5': 'qwen/qwen3-32b',
+  'gpt-5': 'openai/gpt-oss-120b',
 };
 
 /**
@@ -72,7 +72,9 @@ async function callLLM(prompt, temperature = null, options = {}) {
     seed,
     messagesOverride = false,
     messages,
-    timeout = 20000 // Default 20 second timeout, can be overridden
+    timeout = 20000, // Default 20 second timeout, can be overridden
+    max_output_tokens,
+    stop
   } = options || {};
 
   const requestedModel = model || defaultModel;
@@ -122,6 +124,8 @@ async function callLLM(prompt, temperature = null, options = {}) {
   }
   if (response_format) params.response_format = response_format;
   if (typeof seed === 'number') params.seed = seed;
+  if (typeof max_output_tokens === 'number') params.max_output_tokens = max_output_tokens;
+  if (stop) params.stop = stop;
 
   const maxAttempts = 3;
   let lastError;
