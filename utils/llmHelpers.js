@@ -1,7 +1,8 @@
 const OpenAI = require('openai');
 
 function createLLMClient() {
-  const provider = (process.env.LLM_PROVIDER || 'openai').toLowerCase();
+ // const provider = (process.env.LLM_PROVIDER || 'openai').toLowerCase();
+  const provider = ('groq').toLowerCase();
 
   switch (provider) {
     case 'groq': {
