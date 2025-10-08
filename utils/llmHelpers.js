@@ -40,6 +40,7 @@ function createLLMClient() {
 const {
   client: llmClient,
   provider: llmProvider,
+
   defaultModel,
   supportsTemperatureOverride,
   useResponsesAPI
@@ -47,10 +48,11 @@ const {
 
 const GROQ_MODEL_MAP = {
   'gpt-4o-mini': 'llama-3.1-8b-instant',
-  'gpt-4o': 'groq/compound',
+  'gpt-4o': 'openai/gpt‑oss‑120b',
   'gpt-4.1-mini': 'llama-3.1-8b-instant',
+  'gpt-4.1': 'openai/gpt‑oss‑120b',
   'gpt-5-mini': 'llama-3.1-8b-instant',
-  'gpt-5': 'groq/compound'
+  'gpt-5': 'openai/gpt‑oss‑120b'
 };
 
 /**
