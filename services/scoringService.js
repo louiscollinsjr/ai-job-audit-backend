@@ -161,19 +161,21 @@ function scoreStructuredDataPresence({ job_html }) {
 
 // 4. Recency & Freshness (10 pts)
 function scoreRecencyFreshness({ job_html, job_body }) {
+  const htmlText = typeof job_html === 'string' ? job_html : '';
+  const bodyText = typeof job_body === 'string' ? job_body : '';
   let score = 0;
   const suggestions = [];
   let date = null;
   try {
-    const match = job_html && job_html.match(/\"datePosted\"\s*:\s*\"([0-9T:-]+)\"/);
+    const match = htmlText.match(/\"datePosted\"\s*:\s*\"([0-9T:-]+)\"/);
     if (match) date = new Date(match[1]);
-    const timeTag = !date && job_html && job_html.match(/<time[^>]*datetime=["']([^"']+)["'][^>]*>/i);
+    const timeTag = !date && htmlText.match(/<time[^>]*datetime=["']([^"']+)["'][^>]*>/i);
     if (!date && timeTag) date = new Date(timeTag[1]);
   } catch {}
   if (!date) {
-    const textMatch = job_body.match(/(\d{4}-\d{2}-\d{2})/);
+    const textMatch = bodyText.match(/(\d{4}-\d{2}-\d{2})/);
     if (textMatch) date = new Date(textMatch[1]);
-    const rel = !date && job_body.match(/(\d+)\s*(day|week|month)s?\s*ago/i);
+    const rel = !date && bodyText.match(/(\d+)\s*(day|week|month)s?\s*ago/i);
     if (!date && rel) {
       const n = parseInt(rel[1], 10);
       const unit = rel[2].toLowerCase();
@@ -198,7 +200,7 @@ function scoreRecencyFreshness({ job_html, job_body }) {
   } else {
     suggestions.push('No reliable posting date found. Add datePosted or a visible posted date.');
   }
-  if (/(hiring\s*now|immediate|start\s*ASAP)/i.test(job_body)) score = Math.min(10, score + 1);
+  if (/(hiring\s*now|immediate|start\s*ASAP)/i.test(bodyText)) score = Math.min(10, score + 1);
   return { score: Math.min(score, 10), maxScore: 10, breakdown: { date }, suggestions };
 }
 

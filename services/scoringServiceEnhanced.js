@@ -9,6 +9,7 @@ const {
  * Hybrid: Try JSON-LD first, fallback to LLM assessment
  */
 async function scoreStructuredDataPresence({ job_html, job_body }) {
+  const safeBody = typeof job_body === 'string' ? job_body : '';
   const jsonLdResult = scoreStructuredDataPresenceOriginal({ job_html });
   
   if (jsonLdResult.score > 0) {
@@ -44,7 +45,7 @@ Score 0-15 based on:
 Return JSON: {"score": 0-15, "suggestion": "string"}
 
 Job posting:
-${job_body.slice(0, 3500)}`
+${safeBody.slice(0, 3500)}`
           }
         ]
       }
@@ -73,7 +74,8 @@ ${job_body.slice(0, 3500)}`
  * Hybrid: Try date extraction first, fallback to LLM freshness signals
  */
 async function scoreRecencyFreshness({ job_html, job_body }) {
-  const dateResult = scoreRecencyFreshnessOriginal({ job_html, job_body });
+  const safeBody = typeof job_body === 'string' ? job_body : '';
+  const dateResult = scoreRecencyFreshnessOriginal({ job_html, job_body: safeBody });
   
   if (dateResult.breakdown && dateResult.breakdown.date) {
     console.log('[Enhanced] Date found, score:', dateResult.score);
@@ -114,7 +116,7 @@ Score 0-10:
 Return JSON: {"score": 0-10, "suggestion": "string"}
 
 Job posting:
-${job_body.slice(0, 3500)}`
+${safeBody.slice(0, 3500)}`
           }
         ]
       }
@@ -144,6 +146,7 @@ ${job_body.slice(0, 3500)}`
  */
 async function scorePageContextCleanliness({ job_body }) {
   console.log('[Enhanced] Using LLM for content quality assessment');
+  const safeBody = typeof job_body === 'string' ? job_body : '';
   
   try {
     const response = await callLLM(
@@ -176,7 +179,7 @@ Deduct for:
 Return JSON: {"score": 0-10, "suggestion": "string"}
 
 Job posting:
-${job_body.slice(0, 3500)}`
+${safeBody.slice(0, 3500)}`
           }
         ]
       }

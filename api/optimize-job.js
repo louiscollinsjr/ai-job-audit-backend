@@ -209,8 +209,10 @@ Think through the improvements silently, then output **only the final JSON objec
       parsed = JSON.parse(jsonStr);
     } catch (parseError) {
       console.error('[DEBUG] optimize-job: Failed to parse LLM response as JSON:', parseError);
-      // Fallback: return original with minimal improvements
+      console.error('[DEBUG] optimize-job: Raw LLM response snippet:', response?.slice?.(0, 400));
+      // Fallback: surface original text so downstream scoring still works
       return {
+        optimizedText: originalText,
         changeLog: ['Unable to generate optimizations - please try again'],
         unaddressedItems: []
       };
@@ -237,6 +239,7 @@ Think through the improvements silently, then output **only the final JSON objec
     };
 
     const optimizedText = (() => {
+      if (!parsed) return originalText;
       const raw = parsed.optimized_text;
       const normalized = normalizeText(raw);
       const trimmed = normalized.trim();
