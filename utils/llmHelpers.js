@@ -49,11 +49,11 @@ const {
 
 const GROQ_MODEL_MAP = {
   'gpt-4o-mini': 'llama-3.1-8b-instant',
-  'gpt-4o': 'openai/gpt‑oss‑120b',
+  'gpt-4o': 'llama-3.1-70b-versatile',
   'gpt-4.1-mini': 'llama-3.1-8b-instant',
-  'gpt-4.1': 'openai/gpt‑oss‑120b',
+  'gpt-4.1': 'llama-3.1-70b-versatile',
   'gpt-5-mini': 'llama-3.1-8b-instant',
-  'gpt-5': 'openai/gpt‑oss‑120b'
+  'gpt-5': 'qwen/qwen3-32b',
 };
 
 /**
