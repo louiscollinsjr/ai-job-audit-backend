@@ -47,10 +47,10 @@ const {
 
 const GROQ_MODEL_MAP = {
   'gpt-4o-mini': 'llama-3.1-8b-instant',
-  'gpt-4o': 'llama-3.2-70b-versatile',
+  'gpt-4o': 'groq/compound',
   'gpt-4.1-mini': 'llama-3.1-8b-instant',
   'gpt-5-mini': 'llama-3.1-8b-instant',
-  'gpt-5': 'llama-3.1-70b-versatile'
+  'gpt-5': 'groq/compound'
 };
 
 /**
