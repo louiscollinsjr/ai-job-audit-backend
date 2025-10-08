@@ -213,7 +213,12 @@ async function scorePromptAlignment({ job_title, job_body }) {
     userTag: 'services/scoringServiceV2/prompt_alignment',
     maxOutputTokens: 80,
     seed: 1234
-  });
+  }) || {};
+
+  const safeScore = section => (section && Number.isFinite(section.score)) ? section.score : 0;
+  const queryScore = safeScore(llm.query_match);
+  const groupingScore = safeScore(llm.grouping);
+  const structureScore = safeScore(llm.structure);
 
   const hasSections = /(Responsibilities|Requirements|Qualifications|Benefits|Compensation)/i.test(job_body);
   const bodyWords = job_body.split(/\s+/).filter(Boolean);
@@ -227,7 +232,7 @@ async function scorePromptAlignment({ job_title, job_body }) {
   if (earlyPresence) detBonus += 1;
   if (!hasSections) detBonus -= 1;
 
-  const llmAvg = (llm.query_match.score + llm.grouping.score + llm.structure.score) / 3;
+  const llmAvg = (queryScore + groupingScore + structureScore) / 3;
   const adjusted = Math.max(0, Math.min(10, llmAvg + Math.max(-2, Math.min(2, detBonus))));
   const total = Math.round(adjusted * 2);
 
@@ -238,7 +243,7 @@ async function scorePromptAlignment({ job_title, job_body }) {
   return {
     score: Math.min(total, 20),
     maxScore: 20,
-    breakdown: { queryMatch: llm.query_match.score, grouping: llm.grouping.score, structure: llm.structure.score, detBonus },
+    breakdown: { queryMatch: queryScore, grouping: groupingScore, structure: structureScore, detBonus },
     suggestions
   };
 }
