@@ -420,8 +420,42 @@ async function extractJobLocation(job_body = '') {
 }
 
 function findCompensationLine(job_body) {
-  const lines = job_body.split(/\r?\n/).map(l => normalizeWhitespace(l)).filter(Boolean);
-  return lines.find(line => /compensation|salary|pay|base pay|base salary/i.test(line));
+  const rawLines = job_body.split(/\r?\n/);
+  const currencyPattern = /(\$|US\$|USD|£|GBP|€|EUR|C\$|CAD|A\$|AUD)\s*\d/;
+  const rangePattern = /\d[\d,]*(?:\.\d{1,2})?\s*(?:k|K)?\s*(?:-|to|–|—)\s*\d/;
+  const headingBreakPattern = /^(Responsibilities|Requirements|Qualifications|Benefits|Perks|About|Overview|Summary)[:]?$/i;
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = normalizeWhitespace(rawLines[i] || '');
+    if (!line) continue;
+
+    const hasKeyword = /compensation|salary|pay|base pay|base salary/i.test(line);
+    const hasCurrency = currencyPattern.test(line);
+    const hasRange = rangePattern.test(line);
+
+    if (!hasKeyword && !hasCurrency && !hasRange) {
+      continue;
+    }
+
+    const snippet = [line];
+    let lookahead = 1;
+    while (lookahead <= 3 && (i + lookahead) < rawLines.length) {
+      const nextRaw = normalizeWhitespace(rawLines[i + lookahead] || '');
+      if (!nextRaw) break;
+      if (headingBreakPattern.test(nextRaw)) break;
+
+      snippet.push(nextRaw);
+
+      if (currencyPattern.test(nextRaw) || rangePattern.test(nextRaw)) {
+        break;
+      }
+      lookahead++;
+    }
+
+    return snippet.join(' ');
+  }
+
+  return null;
 }
 
 async function llmExtractCompensation(job_body) {
