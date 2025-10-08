@@ -73,6 +73,7 @@ async function callLLM(prompt, temperature = null, options = {}) {
     messagesOverride = false,
     messages,
     timeout = 20000, // Default 20 second timeout, can be overridden
+    max_tokens,
     max_output_tokens,
     stop
   } = options || {};
@@ -124,7 +125,8 @@ async function callLLM(prompt, temperature = null, options = {}) {
   }
   if (response_format) params.response_format = response_format;
   if (typeof seed === 'number') params.seed = seed;
-  if (typeof max_output_tokens === 'number') params.max_output_tokens = max_output_tokens;
+  if (typeof max_tokens === 'number') params.max_tokens = max_tokens;
+  else if (typeof max_output_tokens === 'number') params.max_tokens = max_output_tokens;
   if (stop) params.stop = stop;
 
   const maxAttempts = 3;
