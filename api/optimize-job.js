@@ -316,12 +316,21 @@ ${originalText}
 Think through improvements, then output **only the JSON object** containing the final rewrite.`;
 
   try {
+    const ESTIMATED_SIZE_THRESHOLD = 4000; // rough cutoff before Groq JSON mode hits payload limits
+    const estimatedSize = prompt.length;
+    const useJsonMode = estimatedSize <= ESTIMATED_SIZE_THRESHOLD;
+
+    console.log('[generateOptimizedJobPost] JSON mode enabled:', useJsonMode, 'size:', estimatedSize);
+
     const callOptions = {
       user: 'services/optimize-job',
       systemMessage: 'Professional job posting optimizer. Respond with one JSON object containing the Markdown rewrite and supporting arrays.',
-      response_format: { type: 'json_object' },
       model: 'openai/gpt-oss-20b'
     };
+
+    if (useJsonMode) {
+      callOptions.response_format = { type: 'json_object' };
+    }
 
     // Groq models benefit from explicit creativity/length controls.
     // If this ever runs against GPT-5 (which ignores temperature/top_p), the fields are harmless.
@@ -338,13 +347,11 @@ Think through improvements, then output **only the JSON object** containing the 
       response = await callLLM(prompt, null, groqTunedOptions);
     } catch (jsonError) {
       console.warn('[optimize-job] JSON response_format failed, retrying without constraint:', jsonError?.message);
-      response = await callLLM(prompt, null, {
-        ...callOptions,
-        temperature: 0.7,
-        top_p: 0.85,
-        max_output_tokens: 1500,
-        timeout: 120000
-      });
+      const fallbackOptions = {
+        ...groqTunedOptions
+      };
+      delete fallbackOptions.response_format;
+      response = await callLLM(prompt, null, fallbackOptions);
     }
     
     // Parse JSON response
