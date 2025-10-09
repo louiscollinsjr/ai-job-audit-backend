@@ -359,17 +359,32 @@ Think through improvements, then output **only the JSON object** containing the 
     try {
       let candidate = response?.trim?.() ?? '';
 
+      // Quick strip if the string literally starts with a fence even without closing ```
+      if (candidate.startsWith('```')) {
+        const fenceBreak = candidate.indexOf('\n');
+        if (fenceBreak !== -1) {
+          candidate = candidate.slice(fenceBreak + 1).trim();
+        }
+      }
+
       // Handle fenced code blocks like ```json ... ``` or ``` ... ```
       const fencedMatch = candidate.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
       if (fencedMatch) {
         candidate = fencedMatch[1].trim();
-      } else {
+      }
+
+      if (!fencedMatch) {
         // Attempt to isolate the first JSON object in the string
         const firstBrace = candidate.indexOf('{');
         const lastBrace = candidate.lastIndexOf('}');
         if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-          candidate = candidate.slice(firstBrace, lastBrace + 1);
+          candidate = candidate.slice(firstBrace, lastBrace + 1).trim();
         }
+      }
+
+      // Strip trailing unmatched fence if present after previous trims
+      if (candidate.endsWith('```')) {
+        candidate = candidate.slice(0, -3).trimEnd();
       }
 
       parsed = JSON.parse(candidate);
