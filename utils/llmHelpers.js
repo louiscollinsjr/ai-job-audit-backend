@@ -48,12 +48,12 @@ const {
 } = createLLMClient();
 
 const GROQ_MODEL_MAP = {
-  'gpt-4o-mini': 'llama-3.1-8b-instant',
-  'gpt-4o': 'llama-3.3-70b-versatile',
-  'gpt-4.1-mini': 'llama-3.1-8b-instant',
-  'gpt-4.1': 'llama-3.3-70b-versatile',
-  'gpt-5-mini': 'llama-3.1-8b-instant',
-  'gpt-5': 'openai/gpt-oss-120b',
+  'gpt-4o-mini': 'groq/compound-mini',
+  'gpt-4o': 'groq/compound',
+  'gpt-4.1-mini': 'groq/compound-mini',
+  'gpt-4.1': 'groq/compound',
+  'gpt-5-mini': 'groq/compound-mini',
+  'gpt-5': 'groq/compound',
 };
 
 /**

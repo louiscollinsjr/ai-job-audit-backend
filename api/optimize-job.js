@@ -181,7 +181,7 @@ Think through the improvements silently, then output **only the final JSON objec
         user: 'services/optimize-job',
         systemMessage: 'Professional job posting optimizer. Respond with one JSON object containing the Markdown rewrite and supporting arrays.',
         response_format: { type: 'json_object' },
-        model: 'openai/gpt-oss-120b',
+        model: 'groq/compound',
         temperature: 0.6,
         top_p: 0.7,
         max_output_tokens: 900,
@@ -192,7 +192,7 @@ Think through the improvements silently, then output **only the final JSON objec
       response = await callLLM(prompt, null, { 
         user: 'services/optimize-job',
         systemMessage: 'Professional job posting optimizer. Respond with one JSON object containing the Markdown rewrite and supporting arrays.',
-        model: 'openai/gpt-oss-120b',
+        model: 'groq/compound',
         temperature: 0.6,
         top_p: 0.7,
         max_output_tokens: 900,
