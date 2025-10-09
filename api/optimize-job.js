@@ -357,10 +357,22 @@ Think through improvements, then output **only the JSON object** containing the 
     // Parse JSON response
     let parsed;
     try {
-      // Try to extract JSON from markdown code blocks if present
-      const jsonMatch = response.match(/```json\n([\s\S]*?)\n```/) || response.match(/```\n([\s\S]*?)\n```/);
-      const jsonStr = jsonMatch ? jsonMatch[1] : response;
-      parsed = JSON.parse(jsonStr);
+      let candidate = response?.trim?.() ?? '';
+
+      // Handle fenced code blocks like ```json ... ``` or ``` ... ```
+      const fencedMatch = candidate.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+      if (fencedMatch) {
+        candidate = fencedMatch[1].trim();
+      } else {
+        // Attempt to isolate the first JSON object in the string
+        const firstBrace = candidate.indexOf('{');
+        const lastBrace = candidate.lastIndexOf('}');
+        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+          candidate = candidate.slice(firstBrace, lastBrace + 1);
+        }
+      }
+
+      parsed = JSON.parse(candidate);
     } catch (parseError) {
       console.error('[DEBUG] optimize-job: Failed to parse LLM response as JSON:', parseError);
       console.error('[DEBUG] optimize-job: Raw LLM response snippet:', response?.slice?.(0, 400));
