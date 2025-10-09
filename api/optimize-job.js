@@ -320,7 +320,7 @@ Think through improvements, then output **only the JSON object** containing the 
       user: 'services/optimize-job',
       systemMessage: 'Professional job posting optimizer. Respond with one JSON object containing the Markdown rewrite and supporting arrays.',
       response_format: { type: 'json_object' },
-      model: 'groq/compound'
+      model: 'openai/gpt-oss-20b'
     };
 
     // Groq models benefit from explicit creativity/length controls.
