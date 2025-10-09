@@ -338,7 +338,7 @@ Think through improvements, then output **only the JSON object** containing the 
       ...callOptions,
       temperature: 0.7,
       top_p: 0.85,
-      max_output_tokens: 1500,
+      max_output_tokens: 3000,
       timeout: 120000
     };
 
