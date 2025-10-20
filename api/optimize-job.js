@@ -5,6 +5,125 @@ const { scoreJobEnhanced } = require('../services/scoringServiceV2');
 const { getJobPostingById } = require('../services/databaseService');
 const { callLLM } = require('../utils/llmHelpers');
 const { supabase } = require('../utils/supabase');
+const rawOptimizationConfig = require('../config/optimizationV2');
+const optimizationConfig = normalizeOptimizationConfig(rawOptimizationConfig);
+const { generateOptimizedJobPostV2 } = require('../services/optimizationPipelineV2');
+
+function normalizeOptimizationConfig(config) {
+  const defaults = {
+    featureFlag: false,
+    tokenBudget: { targetTotal: 8000, fallbackTotal: 6000, minOutput: 1500 },
+    models: {},
+    retries: { maxAttempts: 3, backoffMs: [0, 1000, 4000] },
+    segmentation: { maxCharsPerSection: 4500, maxTokensPerSection: 1200 },
+    logging: { enabled: false }
+  };
+
+  if (!config || typeof config !== 'object') {
+    console.error('[ERROR] optimize-job: optimizationV2 config missing or invalid; using safe defaults.');
+    return defaults;
+  }
+
+  const normalizedFeatureFlag = typeof config.featureFlag === 'boolean'
+    ? config.featureFlag
+    : toBoolean(config.featureFlag, defaults.featureFlag, '[WARN] optimize-job: featureFlag invalid, coercing to boolean.');
+
+  const normalizedTokenBudget = {
+    targetTotal: toNumber(config?.tokenBudget?.targetTotal, defaults.tokenBudget.targetTotal,
+      '[WARN] optimize-job: tokenBudget.targetTotal invalid, using default.'),
+    fallbackTotal: toNumber(config?.tokenBudget?.fallbackTotal, defaults.tokenBudget.fallbackTotal,
+      '[WARN] optimize-job: tokenBudget.fallbackTotal invalid, using default.'),
+    minOutput: toNumber(config?.tokenBudget?.minOutput, defaults.tokenBudget.minOutput,
+      '[WARN] optimize-job: tokenBudget.minOutput invalid, using default.')
+  };
+
+  const normalizedModels = (config?.models && typeof config.models === 'object') ? { ...config.models } : { ...defaults.models };
+
+  const normalizedRetries = {
+    maxAttempts: Math.max(1, Math.trunc(toNumber(config?.retries?.maxAttempts, defaults.retries.maxAttempts,
+      '[WARN] optimize-job: retries.maxAttempts invalid, using default.'))),
+    backoffMs: normalizeBackoffList(config?.retries?.backoffMs, defaults.retries.backoffMs,
+      '[WARN] optimize-job: retries.backoffMs invalid, using defaults.')
+  };
+
+  const normalizedSegmentation = {
+    maxCharsPerSection: toNumber(config?.segmentation?.maxCharsPerSection, defaults.segmentation.maxCharsPerSection,
+      '[WARN] optimize-job: segmentation.maxCharsPerSection invalid, using default.')
+      ,
+    maxTokensPerSection: toNumber(config?.segmentation?.maxTokensPerSection, defaults.segmentation.maxTokensPerSection,
+      '[WARN] optimize-job: segmentation.maxTokensPerSection invalid, using default.')
+  };
+
+  const normalizedLogging = {
+    enabled: typeof config?.logging?.enabled === 'boolean'
+      ? config.logging.enabled
+      : toBoolean(config?.logging?.enabled, defaults.logging.enabled,
+        '[WARN] optimize-job: logging.enabled invalid, coercing to boolean.')
+  };
+
+  return {
+    ...config,
+    featureFlag: normalizedFeatureFlag,
+    tokenBudget: normalizedTokenBudget,
+    models: normalizedModels,
+    retries: normalizedRetries,
+    segmentation: normalizedSegmentation,
+    logging: normalizedLogging
+  };
+}
+
+function toNumber(value, fallback, warningMessage) {
+  const num = Number(value);
+  if (Number.isFinite(num)) {
+    return num;
+  }
+  if (warningMessage) {
+    console.warn(warningMessage, { received: value });
+  }
+  return fallback;
+}
+
+function toBoolean(value, fallback, warningMessage) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  if (typeof value === 'string') {
+    const lower = value.toLowerCase();
+    if (lower === 'true') {
+      return true;
+    }
+    if (lower === 'false') {
+      return false;
+    }
+  }
+  if (warningMessage) {
+    console.warn(warningMessage, { received: value });
+  }
+  return Boolean(value);
+}
+
+function normalizeBackoffList(list, fallback, warningMessage) {
+  if (!Array.isArray(list) || !list.length) {
+    if (warningMessage) {
+      console.warn(warningMessage, { received: list });
+    }
+    return fallback;
+  }
+  const normalized = list
+    .map((item) => Number(item))
+    .filter((item) => Number.isFinite(item) && item >= 0);
+
+  if (!normalized.length) {
+    if (warningMessage) {
+      console.warn(warningMessage, { received: list });
+    }
+    return fallback;
+  }
+  return normalized;
+}
 
 /**
  * POST /api/v1/optimize-job
@@ -55,7 +174,22 @@ router.post('/', async (req, res) => {
 
     // 2. Generate optimized version with LLM (using category insights)
     console.log('[DEBUG] optimize-job: Generating optimized text with LLM');
-    const optimizationResult = await generateOptimizedJobPost(jobText, originalScore, originalCategories);
+    let optimizationResult;
+    if (optimizationConfig.featureFlag) {
+      console.log('[DEBUG] optimize-job: Using pipeline V2');
+      optimizationResult = await generateOptimizedJobPostV2({
+        jobText,
+        jobHtml: originalReport.job_html || '',
+        originalScore,
+        categories: originalCategories,
+        reportMetadata: {
+          title: originalReport.job_title,
+          companyName: originalReport.company_name || originalReport.company || originalReport.organization
+        }
+      });
+    } else {
+      optimizationResult = await generateOptimizedJobPost(jobText, originalScore, originalCategories);
+    }
     
     // 3. Re-score optimized version using ENHANCED (V2) scoring - same as audit endpoint
     console.log('[DEBUG] optimize-job: Scoring optimized text with V2 Enhanced scoring');

@@ -10,7 +10,8 @@
     "playwright": "^1.41.0",
     "@supabase/supabase-js": "^2.40.0",
     "playwright-extra": "^4.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2"
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "cheerio": "^1.0.0-rc.12"
   },
   "scripts": {
     "migrate": "node -e 'require(\"./utils/migrate\").runMigrations()'",
