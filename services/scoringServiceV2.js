@@ -62,11 +62,11 @@ const CURRENCY_SYMBOLS = {
 };
 
 const PERIOD_KEYWORDS = [
-  { regex: /(per\s*(year|yr|annum)|annual(?:ly)?|yearly)/i, value: 'year' },
-  { regex: /(per\s*(month|mo)|monthly)/i, value: 'month' },
-  { regex: /(per\s*(week|wk)|weekly)/i, value: 'week' },
-  { regex: /(per\s*(day)|daily)/i, value: 'day' },
-  { regex: /(per\s*(hour|hr)|hourly)/i, value: 'hour' }
+  { regex: /(per\s*(year|yr|annum)|annual(?:ly)?|yearly|\/(yr|year)|a\s*year)/i, value: 'year' },
+  { regex: /(per\s*(month|mo)|monthly|\/(mo|month))/i, value: 'month' },
+  { regex: /(per\s*(week|wk)|weekly|\/(wk|week))/i, value: 'week' },
+  { regex: /(per\s*(day)|daily|\/(day))/i, value: 'day' },
+  { regex: /(per\s*(hour|hr)|hourly|\/(hr|hour))/i, value: 'hour' }
 ];
 
 const VAGUE_COMP_TERMS = /(competitive|commensurate|market rate|depends on experience|DOE|negotiable)/i;
@@ -109,11 +109,20 @@ function parseAmount(value, hasKSuffix = false) {
 
 function detectPeriod(text) {
   if (!text) return null;
+  
+  // Check explicit period keywords first
   for (const entry of PERIOD_KEYWORDS) {
     if (entry.regex.test(text)) {
       return entry.value;
     }
   }
+  
+  // Infer from salary range (heuristic: >200k likely annual, <200 likely hourly)
+  const hasLargeNumber = /\$?\s*[2-9]\d{2}[kK]|\$?\s*[1-9]\d{5,}/i.test(text);
+  if (hasLargeNumber) {
+    return 'year'; // Likely annual salary
+  }
+  
   return null;
 }
 
@@ -449,22 +458,47 @@ function findCompensationLine(job_body) {
 
     const snippet = [line];
     let lookahead = 1;
-    while (lookahead <= 3 && (i + lookahead) < rawLines.length) {
+    let emptyLineCount = 0;
+    while (lookahead <= 5 && (i + lookahead) < rawLines.length) {
       const nextRaw = normalizeWhitespace(rawLines[i + lookahead] || '');
-      if (!nextRaw) break;
+      
+      // Skip empty lines but count them
+      if (!nextRaw) {
+        emptyLineCount++;
+        if (emptyLineCount > 2) break; // Stop after 2 consecutive empty lines
+        lookahead++;
+        continue;
+      }
+      
+      // Reset empty line counter
+      emptyLineCount = 0;
+      
+      // Stop at next major section heading
       if (headingBreakPattern.test(nextRaw)) break;
 
       snippet.push(nextRaw);
 
+      // Found salary data, we're done
       if (currencyPattern.test(nextRaw) || rangePattern.test(nextRaw)) {
         break;
       }
       lookahead++;
     }
 
-    return snippet.join(' ');
+    const result = snippet.join(' ');
+    if (process.env.OPTIMIZATION_VERBOSE_LOGS === 'true') {
+      console.log('[DEBUG] findCompensationLine result:', {
+        foundAtLine: i,
+        snippetLines: snippet.length,
+        result: result.slice(0, 150)
+      });
+    }
+    return result;
   }
 
+  if (process.env.OPTIMIZATION_VERBOSE_LOGS === 'true') {
+    console.log('[DEBUG] findCompensationLine: No compensation section found');
+  }
   return null;
 }
 
@@ -523,7 +557,7 @@ async function extractCompensationData(job_body = '', job_location_string = '') 
   const searchRegion = findCompensationLine(job_body) || job_body;
   
   // Enhanced regex patterns for better deterministic detection
-  const rangeRegex = /(?<currency>\$|US\$|USD|£|GBP|€|EUR|C\$|CAD|A\$|AUD)?\s*(?<min>\d{2,3}[\d,]*(?:\.\d{1,2})?)\s*(?:k|K)?\s*(?:-|to|–|—|through)\s*(?<currency2>\$|US\$|USD|£|GBP|€|EUR|C\$|CAD|A\$|AUD)?\s*(?<max>\d{2,3}[\d,]*(?:\.\d{1,2})?)\s*(?:k|K)?/i;
+  const rangeRegex = /(?<currency>\$|US\$|USD|£|GBP|€|EUR|C\$|CAD|A\$|AUD)?\s*(?<min>\d{1,3}[\d,]*(?:\.\d{1,2})?)\s*(?<k1>k|K)?\s*(?:-|to|–|—|through)\s*(?<currency2>\$|US\$|USD|£|GBP|€|EUR|C\$|CAD|A\$|AUD)?\s*(?<max>\d{1,3}[\d,]*(?:\.\d{1,2})?)\s*(?<k2>k|K)?/i;
   const singleRegex = /(?<currency>\$|US\$|USD|£|GBP|€|EUR|C\$|CAD|A\$|AUD)\s*(?<amount>\d{2,3}[\d,]*(?:\.\d{1,2})?)\s*(?:k|K)?/i;
 
   const rangeMatch = searchRegion.match(rangeRegex);
@@ -536,19 +570,17 @@ async function extractCompensationData(job_body = '', job_location_string = '') 
       : detectCurrency(searchRegion);
 
   // Check for 'k' suffix in the matched text
-  const hasKSuffix = rangeMatch 
-    ? /\d+\s*k/i.test(rangeMatch[0])
-    : singleMatch 
-    ? /\d+\s*k/i.test(singleMatch[0])
-    : false;
+  const hasKSuffixMin = rangeMatch && rangeMatch.groups.k1;
+  const hasKSuffixMax = rangeMatch && rangeMatch.groups.k2;
+  const hasKSuffix = singleMatch ? /\d+\s*k/i.test(singleMatch[0]) : false;
 
   const compensation = {
     source: 'deterministic',
     originalText: searchRegion.slice(0, 280),
     currency: currency || null,
     payPeriod: period,
-    min: rangeMatch ? parseAmount(rangeMatch.groups.min, hasKSuffix) : null,
-    max: rangeMatch ? parseAmount(rangeMatch.groups.max, hasKSuffix) : null,
+    min: rangeMatch ? parseAmount(rangeMatch.groups.min, hasKSuffixMin) : null,
+    max: rangeMatch ? parseAmount(rangeMatch.groups.max, hasKSuffixMax) : null,
     amount: singleMatch ? parseAmount(singleMatch.groups.amount, hasKSuffix) : null,
     isRange: !!rangeMatch,
     includesBonus: /bonus/i.test(searchRegion),
@@ -562,6 +594,20 @@ async function extractCompensationData(job_body = '', job_location_string = '') 
   // Calculate confidence
   compensation.confidence = calculateCompensationConfidence(compensation);
 
+  // Log compensation detection for debugging
+  if (process.env.OPTIMIZATION_VERBOSE_LOGS === 'true') {
+    console.log('[DEBUG] Compensation detection:', {
+      confidence: compensation.confidence.toFixed(2),
+      source: compensation.source,
+      min: compensation.min,
+      max: compensation.max,
+      amount: compensation.amount,
+      currency: compensation.currency,
+      payPeriod: compensation.payPeriod,
+      originalText: compensation.originalText?.slice(0, 100)
+    });
+  }
+  
   // Only call LLM if confidence is below threshold (0.5) and no amount found
   if (compensation.confidence < 0.5 && !compensation.min && compensation.amount === null) {
     console.log('[ScoringV2] Compensation confidence low, invoking LLM fallback');
@@ -654,6 +700,21 @@ async function scoreCompensationAndCompliance(jobData) {
       locationSource: jobLocation.source || null,
       compensation
     };
+
+    // Verbose logging for compensation scoring
+    if (process.env.OPTIMIZATION_VERBOSE_LOGS === 'true') {
+      console.log('[DEBUG] Compensation scoring result:', {
+        score: `${score}/15`,
+        status,
+        hasRange: compensation.isRange,
+        hasCurrency: !!compensation.currency,
+        hasPeriod: !!compensation.payPeriod,
+        min: compensation.min,
+        max: compensation.max,
+        requiresDisclosure,
+        jurisdictions: jurisdictions.join(', ') || 'none'
+      });
+    }
 
     return {
       score,

@@ -171,6 +171,11 @@ router.post('/', async (req, res) => {
     const originalAnalysis = await scoreJobEnhanced(originalJobData);
     const originalCategories = originalAnalysis?.categories || {};
     console.log('[DEBUG] optimize-job: Original category scores:', JSON.stringify(originalCategories, null, 2));
+    
+    // Log compensation details for comparison
+    const originalCompScore = originalCategories?.compensation?.score || 0;
+    const originalCompMax = originalCategories?.compensation?.maxScore || 15;
+    console.log(`[DEBUG] optimize-job: Original compensation: ${originalCompScore}/${originalCompMax}`);
 
     // 2. Generate optimized version with LLM (using category insights)
     console.log('[DEBUG] optimize-job: Generating optimized text with LLM');
@@ -184,7 +189,8 @@ router.post('/', async (req, res) => {
         categories: originalCategories,
         reportMetadata: {
           title: originalReport.job_title,
-          companyName: originalReport.company_name || originalReport.company || originalReport.organization
+          companyName: originalReport.company_name || originalReport.company || originalReport.organization,
+          job_location: originalAnalysis?.job_location
         }
       });
     } else {
@@ -202,6 +208,13 @@ router.post('/', async (req, res) => {
     console.log('[DEBUG] optimize-job: Full optimizedAnalysis object:', JSON.stringify(optimizedAnalysis, null, 2));
     const optimizedScore = optimizedAnalysis.total_score; // Note: property is total_score, not totalScore
     
+    // Log compensation comparison
+    const optimizedCategories = optimizedAnalysis?.categories || {};
+    const optimizedCompScore = optimizedCategories?.compensation?.score || 0;
+    const optimizedCompMax = optimizedCategories?.compensation?.maxScore || 15;
+    const compDelta = optimizedCompScore - originalCompScore;
+    console.log(`[DEBUG] optimize-job: Optimized compensation: ${optimizedCompScore}/${optimizedCompMax} (${compDelta >= 0 ? '+' : ''}${compDelta})`);
+    
     console.log('[DEBUG] optimize-job: Optimized score calculated:', optimizedScore);
     console.log('[DEBUG] optimize-job: Type of optimizedScore:', typeof optimizedScore);
     
@@ -211,11 +224,17 @@ router.post('/', async (req, res) => {
     }
 
     // 3b. Guardrail: ensure optimization improves the score before saving
-    if (optimizedScore <= originalScore) {
+    // Allow minor regressions if specific categories show major improvements
+    const scoreDelta = optimizedScore - originalScore;
+    const allowMinorRegression = compDelta >= 5 && scoreDelta >= -5;
+    
+    if (optimizedScore <= originalScore && !allowMinorRegression) {
       console.warn('[WARN] optimize-job: Optimized score did not improve', {
         original: originalScore,
         optimized: optimizedScore,
-        delta: optimizedScore - originalScore
+        delta: scoreDelta,
+        compensationDelta: compDelta,
+        allowedRegression: allowMinorRegression
       });
       return res.status(200).json({
         error: 'Optimization did not improve score',
@@ -223,6 +242,13 @@ router.post('/', async (req, res) => {
         original_score: originalScore,
         optimized_score: optimizedScore,
         improvement: false
+      });
+    }
+    
+    if (allowMinorRegression && scoreDelta < 0) {
+      console.log('[INFO] optimize-job: Allowing minor regression due to major compensation improvement:', {
+        scoreDelta,
+        compensationDelta: compDelta
       });
     }
 

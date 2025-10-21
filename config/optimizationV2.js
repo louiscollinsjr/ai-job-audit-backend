@@ -8,10 +8,16 @@ module.exports = {
     minOutput: Number(process.env.OPTIMIZATION_MIN_OUTPUT || 1500)
   },
   models: {
-    sectionModel: process.env.OPTIMIZATION_SECTION_MODEL || 'gpt-4.1-mini',
-    coherenceModel: process.env.OPTIMIZATION_COHERENCE_MODEL || 'gpt-4.1',
+    sectionModel: process.env.OPTIMIZATION_SECTION_MODEL || 'gpt-5-mini',
+    coherenceModel: process.env.OPTIMIZATION_COHERENCE_MODEL || 'gpt-5-mini',
     sectionTemperature: Number(process.env.OPTIMIZATION_SECTION_TEMPERATURE ?? 0.4),
     coherenceTemperature: Number(process.env.OPTIMIZATION_COHERENCE_TEMPERATURE ?? 0.3)
+  },
+  preservation: {
+    // Brand keywords that should never be removed or altered
+    brandKeywords: parseList(process.env.OPTIMIZATION_BRAND_KEYWORDS || 'OpenAI,ChatGPT,GPT,AGI,Claude,Anthropic,Google,Microsoft,Meta,Amazon,Apple'),
+    // Preserve exact job titles
+    preserveTitle: String(process.env.OPTIMIZATION_PRESERVE_TITLE ?? 'true').toLowerCase() === 'true'
   },
   retries: {
     maxAttempts: Number(process.env.OPTIMIZATION_MAX_ATTEMPTS ?? 3),

@@ -13,10 +13,14 @@ async function generateOptimizedJobPostV2({ jobText, jobHtml, originalScore, cat
     tone: fingerprint?.tone,
     formatting: fingerprint?.formatting,
     originalScore,
-    categories
+    categories,
+    job_location: reportMetadata.job_location
   };
 
   const segments = segmentIfNeeded({ jobHtml, jobText, fingerprint });
+  console.log('[PERF] Section optimization started:', { segmentCount: segments.length, timestamp: new Date().toISOString() });
+  const sectionStartTime = Date.now();
+  
   let optimizedSections;
   try {
     optimizedSections = await Promise.all(
@@ -24,6 +28,12 @@ async function generateOptimizedJobPostV2({ jobText, jobHtml, originalScore, cat
         generateOptimizedSection({ section: segment, fingerprint, globalContext })
       )
     );
+    const sectionDuration = Date.now() - sectionStartTime;
+    console.log('[PERF] Section optimization completed:', { 
+      segmentCount: segments.length, 
+      duration: `${sectionDuration}ms`,
+      avgPerSection: `${Math.round(sectionDuration / segments.length)}ms`
+    });
   } catch (error) {
     console.error('[ERROR] optimizationPipelineV2: Failed to optimize sections in parallel', {
       segmentCount: segments.length,
@@ -33,11 +43,33 @@ async function generateOptimizedJobPostV2({ jobText, jobHtml, originalScore, cat
   }
 
   const assembled = mergeSections(optimizedSections, fingerprint);
+  console.log('[PERF] Coherence pass started:', { draftLength: assembled.length, timestamp: new Date().toISOString() });
+  const coherenceStartTime = Date.now();
+  
   const coherencePayload = await runCoherencePass({
     draft: assembled,
     globalContext,
     schemaSnapshot
   });
+  
+  const coherenceDuration = Date.now() - coherenceStartTime;
+  console.log('[PERF] Coherence pass completed:', { duration: `${coherenceDuration}ms` });
+  
+  // Validate section structure preservation
+  const originalSectionCount = (assembled.match(/^#{1,3}\s+/gm) || []).length;
+  const optimizedSectionCount = (coherencePayload.optimized_text.match(/^#{1,3}\s+/gm) || []).length;
+  if (optimizedSectionCount < originalSectionCount) {
+    console.warn('[WARN] Coherence pass reduced section count:', {
+      original: originalSectionCount,
+      optimized: optimizedSectionCount,
+      lost: originalSectionCount - optimizedSectionCount
+    });
+  } else {
+    console.log('[DEBUG] Section structure preserved:', {
+      original: originalSectionCount,
+      optimized: optimizedSectionCount
+    });
+  }
 
   const safeOutput = await ensureJsonSafeOutput(JSON.stringify({
     optimized_text: coherencePayload.optimized_text,

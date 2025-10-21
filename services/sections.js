@@ -54,6 +54,7 @@ async function generateOptimizedSection({ section, fingerprint, globalContext })
     model: config.models.sectionModel,
     response_format: { type: 'json_object' },
     max_output_tokens: maxOutputTokens,
+    timeout: 60000, // 60s timeout for slower gpt-5 models
     user: 'services/sections.generateOptimizedSection'
   };
   const response = await callLLM(prompt, config.models.sectionTemperature, llmOptions);
@@ -76,27 +77,49 @@ function mergeSections(sections, fingerprint) {
 }
 
 async function runCoherencePass({ draft, globalContext, schemaSnapshot }) {
-  const prompt = buildCoherencePrompt({ draft, globalContext, schemaSnapshot });
-  const promptTokens = estimatePromptTokens({ textLength: prompt.length, sectionCount: 1 });
-  const maxOutputTokens = computeMaxOutputTokens(
-    promptTokens,
-    config.tokenBudget.targetTotal,
-    config.tokenBudget.minOutput,
-    config.tokenBudget.fallbackTotal
-  );
-  const llmOptions = {
-    model: config.models.coherenceModel,
-    response_format: { type: 'json_object' },
-    user: 'services/sections.runCoherencePass',
-    max_output_tokens: maxOutputTokens
-  };
-  const response = await callLLM(prompt, config.models.coherenceTemperature, llmOptions);
-  const parsed = await ensureJsonSafeOutput(response);
-  return {
-    optimized_text: parsed.optimized_text || draft,
-    change_log: parsed.change_log || [],
-    unaddressed_items: parsed.unaddressed_items || []
-  };
+  try {
+    const prompt = buildCoherencePrompt({ draft, globalContext, schemaSnapshot });
+    const promptTokens = estimatePromptTokens({ textLength: prompt.length, sectionCount: 1 });
+    const maxOutputTokens = computeMaxOutputTokens(
+      promptTokens,
+      config.tokenBudget.targetTotal,
+      config.tokenBudget.minOutput,
+      config.tokenBudget.fallbackTotal
+    );
+    const llmOptions = {
+      model: config.models.coherenceModel,
+      response_format: { type: 'json_object' },
+      timeout: 60000, // 60s timeout for slower gpt-5 models
+      user: 'services/sections.runCoherencePass',
+      max_output_tokens: maxOutputTokens
+    };
+    const response = await callLLM(prompt, config.models.coherenceTemperature, llmOptions);
+    
+    // Handle empty response gracefully
+    if (!response || !response.trim()) {
+      console.warn('[WARN] Coherence pass returned empty response, using draft as-is');
+      return {
+        optimized_text: draft,
+        change_log: ['Coherence pass skipped due to empty LLM response'],
+        unaddressed_items: []
+      };
+    }
+    
+    const parsed = await ensureJsonSafeOutput(response);
+    return {
+      optimized_text: parsed.optimized_text || draft,
+      change_log: parsed.change_log || [],
+      unaddressed_items: parsed.unaddressed_items || []
+    };
+  } catch (error) {
+    console.error('[ERROR] Coherence pass failed:', error.message);
+    console.warn('[WARN] Falling back to draft without coherence pass');
+    return {
+      optimized_text: draft,
+      change_log: [`Coherence pass failed: ${error.message}`],
+      unaddressed_items: []
+    };
+  }
 }
 
 function enforceSegmentLimits(segments) {
@@ -196,17 +219,38 @@ function buildSectionPrompt({ section, fingerprint, globalContext = {} }) {
   const heading = section.headingText || section.label;
   const tone = fingerprint?.tone || {};
   const formatting = fingerprint?.formatting || {};
+  const config = require('../config/optimizationV2');
+  
   const contextLines = [
     `Company: ${globalContext.companyName || 'Unknown'}`,
     `Role: ${globalContext.title || globalContext.role || 'Unknown Role'}`,
     `Desired Tone: ${tone.voice || 'professional'}${tone.missionDriven ? ', mission-driven' : ''}`,
     `Formatting: ${formatting.usesHtml ? 'HTML' : 'Markdown'} with bullet style ${formatting.bulletStyle || 'default'}`
   ];
+  
+  // Preserve location information
+  const locationInfo = globalContext.location || globalContext.job_location;
+  if (locationInfo?.summary || locationInfo?.raw) {
+    contextLines.push(`Location: ${locationInfo.summary || locationInfo.raw}`);
+  }
+  
   const lexicalAnchors = fingerprint?.lexicalAnchors?.slice(0, 5) || [];
   const anchorLine = lexicalAnchors.length ? `Preserve branded phrases: ${lexicalAnchors.join(', ')}` : '';
-  return [
+  
+  // Check if this is a title section
+  const isTitle = /title/i.test(heading) || /title/i.test(section.label);
+  const preserveTitle = config.preservation?.preserveTitle !== false;
+  
+  // Brand keyword preservation
+  const brandKeywords = config.preservation?.brandKeywords || [];
+  const brandLine = brandKeywords.length ? `CRITICAL: Preserve these brand terms exactly: ${brandKeywords.join(', ')}` : '';
+  
+  const instructions = [
     'You are optimizing a single section of a job posting.',
     'Stay faithful to the company fingerprint while improving clarity, inclusivity, and completeness.',
+    'IMPORTANT: If location information is mentioned, preserve it exactly (city, state, remote/hybrid status).',
+    brandLine,
+    isTitle && preserveTitle ? 'CRITICAL: This is the job title. Preserve it EXACTLY as provided. Do not remove company name or any specifics. Only fix typos.' : null,
     contextLines.filter(Boolean).join('\n'),
     anchorLine,
     'Return JSON with keys optimized_text, change_log (array), unaddressed_items (array).',
@@ -215,26 +259,45 @@ function buildSectionPrompt({ section, fingerprint, globalContext = {} }) {
     section.rawText,
     '---'
   ].filter(Boolean).join('\n\n');
+  
+  return instructions;
 }
 
 function buildCoherencePrompt({ draft, globalContext, schemaSnapshot }) {
+  const config = require('../config/optimizationV2');
   const contextLines = [
     `Company: ${globalContext.companyName || 'Unknown'}`,
     `Role: ${globalContext.title || 'Unknown Role'}`,
     `Tone: ${globalContext.tone?.voice || 'professional'}`
   ];
+  
+  // Preserve location information
+  const locationInfo = globalContext.location || globalContext.job_location;
+  if (locationInfo?.summary || locationInfo?.raw) {
+    contextLines.push(`Location: ${locationInfo.summary || locationInfo.raw}`);
+  }
+  
+  // Brand keyword preservation
+  const brandKeywords = config.preservation?.brandKeywords || [];
+  const brandLine = brandKeywords.length ? `Preserve these brand terms exactly: ${brandKeywords.join(', ')}` : '';
+  
   const schemaHints = schemaSnapshot
     ? Object.entries(schemaSnapshot)
         .filter(([, value]) => value)
         .map(([key, value]) => `${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`)
     : [];
   return [
-    'Ensure the following job posting sections read as a cohesive, on-brand document.',
-    'Fix redundant transitions, align tone, and ensure formatting consistency.',
+    'Polish the following job posting for cohesion and tone consistency.',
+    'Preserve all section headings, location details, and structural elements.',
+    brandLine,
+    'Improve flow and transitions while maintaining the existing organization.',
     contextLines.join('\n'),
     schemaHints.length ? `Schema context:\n${schemaHints.join('\n')}` : '',
-    'Return JSON with optimized_text (full document), change_log array, unaddressed_items array.',
-    '---',
+    '',
+    'Return valid JSON with these exact keys:',
+    '{"optimized_text": "full polished document", "change_log": ["change 1", "change 2"], "unaddressed_items": []}',
+    '',
+    '--- Document to Polish ---',
     draft
   ].filter(Boolean).join('\n\n');
 }

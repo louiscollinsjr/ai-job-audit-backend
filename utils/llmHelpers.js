@@ -1,8 +1,8 @@
 const OpenAI = require('openai');
 
 function createLLMClient() {
- // const provider = (process.env.LLM_PROVIDER || 'openai').toLowerCase();
-  const provider = ('groq').toLowerCase();
+  const provider = (process.env.LLM_PROVIDER || 'groq').toLowerCase();
+  //const provider = ('groq').toLowerCase(); // Switched to OpenAI for optimization
 
   switch (provider) {
     case 'groq': {
@@ -125,8 +125,22 @@ async function callLLM(prompt, temperature = null, options = {}) {
   }
   if (response_format) params.response_format = response_format;
   if (typeof seed === 'number') params.seed = seed;
-  if (typeof max_tokens === 'number') params.max_tokens = max_tokens;
-  else if (typeof max_output_tokens === 'number') params.max_tokens = max_output_tokens;
+  
+  // gpt-5 models use max_completion_tokens instead of max_tokens
+  const usesCompletionTokens = requestedModel.includes('gpt-5') || requestedModel.includes('o1') || requestedModel.includes('o3');
+  if (typeof max_tokens === 'number') {
+    if (usesCompletionTokens) {
+      params.max_completion_tokens = max_tokens;
+    } else {
+      params.max_tokens = max_tokens;
+    }
+  } else if (typeof max_output_tokens === 'number') {
+    if (usesCompletionTokens) {
+      params.max_completion_tokens = max_output_tokens;
+    } else {
+      params.max_tokens = max_output_tokens;
+    }
+  }
   if (stop) params.stop = stop;
 
   const maxAttempts = 3;
