@@ -3,6 +3,12 @@ const cors = require('cors');
 const multer = require('multer');
 const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
+const { File: UndiciFile } = require('undici');
+
+if (typeof globalThis.File === 'undefined' && UndiciFile) {
+  globalThis.File = UndiciFile;
+}
+
 const app = express();
 const port = process.env.PORT || 3000;
 
