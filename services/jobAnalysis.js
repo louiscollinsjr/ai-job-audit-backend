@@ -133,18 +133,79 @@ function detectFormatting({ $, jobText }) {
 }
 
 function detectCompanyName({ $, jobText }) {
+  // Try HTML-based extraction first
   if ($) {
-    const ogSite = $('meta[property="og:site_name"]').attr('content');
-    if (ogSite) {
-      return ogSite.trim();
+    // Check meta tags
+    const metaOg = $('meta[property="og:site_name"]').attr('content');
+    if (metaOg && metaOg.trim().length > 0) {
+      return metaOg.trim();
     }
+    
+    // Check for JSON-LD schema
+    const jsonLdCompany = extractCompanyFromJsonLd($);
+    if (jsonLdCompany) {
+      return jsonLdCompany;
+    }
+    
+    // Check common brand elements
     const headerBrand = $('[class*="logo"], [class*="brand"], header h1').first().text();
-    if (headerBrand) {
+    if (headerBrand && headerBrand.trim().length > 2) {
       return headerBrand.trim();
     }
   }
-  const match = (jobText || '').match(/at\s+([A-Z][A-Za-z0-9& ]+)/);
-  return match ? match[1].trim() : null;
+  
+  // Text-based extraction with multiple patterns
+  const text = jobText || '';
+  
+  const patterns = [
+    // "at Company" or "@ Company"
+    /(?:at|@)\s+([A-Z][A-Za-z0-9&\s]+?)(?:\s+[-|]|\n|is\s|$)/,
+    // "Company is hiring/looking/seeking"
+    /([A-Z][A-Za-z0-9&\s]+?)\s+is\s+(?:hiring|looking|seeking)/i,
+    // "Join Company" or "Join the Company team"
+    /Join\s+(?:the\s+)?([A-Z][A-Za-z0-9&\s]+?)\s+team/i,
+    // "Company - Job Title" format (common in titles)
+    /^([A-Z][A-Za-z0-9&\s]+?)\s+[-–]\s+/,
+    // "About Company" section
+    /About\s+([A-Z][A-Za-z0-9&\s]+?)(?:\n|:)/i
+  ];
+  
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      const company = match[1].trim();
+      // Filter out common false positives
+      if (company.length > 2 && 
+          !company.match(/^(The|Our|This|Your|Job|Position|Role|Team|Company)$/i)) {
+        return company;
+      }
+    }
+  }
+  
+  return null;
+}
+
+function extractCompanyFromJsonLd($) {
+  try {
+    const scripts = [];
+    $('script[type="application/ld+json"]').each((_, el) => {
+      const content = $(el).contents().text();
+      try {
+        const parsed = JSON.parse(content);
+        scripts.push(parsed);
+      } catch (error) {
+        // Skip invalid JSON
+      }
+    });
+    
+    const jobPosting = scripts.find((item) => item['@type'] === 'JobPosting');
+    if (jobPosting?.hiringOrganization?.name) {
+      return jobPosting.hiringOrganization.name;
+    }
+  } catch (error) {
+    // Ignore errors
+  }
+  return null;
 }
 
 function parseJsonLd(jobHtml) {

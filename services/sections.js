@@ -95,8 +95,8 @@ async function runCoherencePass({ draft, globalContext, schemaSnapshot }) {
     };
     const response = await callLLM(prompt, config.models.coherenceTemperature, llmOptions);
     
-    // Handle empty response gracefully
-    if (!response || !response.trim()) {
+    // Handle empty response gracefully (callLLM always returns string or null/undefined)
+    if (!response || (typeof response === 'string' && !response.trim())) {
       console.warn('[WARN] Coherence pass returned empty response, using draft as-is');
       return {
         optimized_text: draft,
@@ -234,8 +234,10 @@ function buildSectionPrompt({ section, fingerprint, globalContext = {} }) {
     contextLines.push(`Location: ${locationInfo.summary || locationInfo.raw}`);
   }
   
-  const lexicalAnchors = fingerprint?.lexicalAnchors?.slice(0, 5) || [];
-  const anchorLine = lexicalAnchors.length ? `Preserve branded phrases: ${lexicalAnchors.join(', ')}` : '';
+  const lexicalAnchors = fingerprint?.lexicalAnchors?.slice(0, 8) || [];
+  const anchorLine = lexicalAnchors.length 
+    ? `BRAND VOICE: Preserve these company-specific phrases exactly as they appear: "${lexicalAnchors.join('", "')}"` 
+    : '';
   
   // Check if this is a title section
   const isTitle = /title/i.test(heading) || /title/i.test(section.label);
@@ -245,14 +247,31 @@ function buildSectionPrompt({ section, fingerprint, globalContext = {} }) {
   const brandKeywords = config.preservation?.brandKeywords || [];
   const brandLine = brandKeywords.length ? `CRITICAL: Preserve these brand terms exactly: ${brandKeywords.join(', ')}` : '';
   
+  // Build brand consistency rules
+  const brandRules = [];
+  if (globalContext.companyName) {
+    brandRules.push(`- Always refer to the company as "${globalContext.companyName}" (exact spelling)`);
+  }
+  if (lexicalAnchors.length > 0) {
+    brandRules.push(`- Maintain company-specific terminology and branded phrases`);
+  }
+  if (tone.voice) {
+    brandRules.push(`- Keep the ${tone.voice} tone consistent with the company's voice`);
+  }
+  
+  const brandSection = brandRules.length 
+    ? `\n### Brand Consistency Requirements:\n${brandRules.join('\n')}` 
+    : '';
+  
   const instructions = [
     'You are optimizing a single section of a job posting.',
-    'Stay faithful to the company fingerprint while improving clarity, inclusivity, and completeness.',
+    'PRIMARY GOAL: Stay faithful to the company\'s brand voice and fingerprint while improving clarity, inclusivity, and completeness.',
     'IMPORTANT: If location information is mentioned, preserve it exactly (city, state, remote/hybrid status).',
     brandLine,
+    anchorLine,
     isTitle && preserveTitle ? 'CRITICAL: This is the job title. Preserve it EXACTLY as provided. Do not remove company name or any specifics. Only fix typos.' : null,
     contextLines.filter(Boolean).join('\n'),
-    anchorLine,
+    brandSection,
     'Return JSON with keys optimized_text, change_log (array), unaddressed_items (array).',
     `### Section Heading: ${heading}`,
     '### Original Section Content:',
@@ -264,7 +283,6 @@ function buildSectionPrompt({ section, fingerprint, globalContext = {} }) {
 }
 
 function buildCoherencePrompt({ draft, globalContext, schemaSnapshot }) {
-  const config = require('../config/optimizationV2');
   const contextLines = [
     `Company: ${globalContext.companyName || 'Unknown'}`,
     `Role: ${globalContext.title || 'Unknown Role'}`,
@@ -279,7 +297,23 @@ function buildCoherencePrompt({ draft, globalContext, schemaSnapshot }) {
   
   // Brand keyword preservation
   const brandKeywords = config.preservation?.brandKeywords || [];
-  const brandLine = brandKeywords.length ? `Preserve these brand terms exactly: ${brandKeywords.join(', ')}` : '';
+  const brandLine = brandKeywords.length ? `CRITICAL: Preserve these brand terms exactly: ${brandKeywords.join(', ')}` : '';
+  
+  // Build brand consistency requirements
+  const brandRules = [];
+  if (globalContext.companyName) {
+    brandRules.push(`- Maintain consistent reference to "${globalContext.companyName}"`);
+  }
+  if (globalContext.tone?.voice) {
+    brandRules.push(`- Keep the ${globalContext.tone.voice} tone throughout`);
+  }
+  if (globalContext.formatting) {
+    brandRules.push(`- Preserve the company's formatting style`);
+  }
+  
+  const brandSection = brandRules.length 
+    ? `\nBrand Consistency:\n${brandRules.join('\n')}` 
+    : '';
   
   const schemaHints = schemaSnapshot
     ? Object.entries(schemaSnapshot)
@@ -288,8 +322,10 @@ function buildCoherencePrompt({ draft, globalContext, schemaSnapshot }) {
     : [];
   return [
     'Polish the following job posting for cohesion and tone consistency.',
-    'Preserve all section headings, location details, and structural elements.',
+    'PRIMARY GOAL: Maintain the company\'s brand voice while improving flow and readability.',
+    'Preserve all section headings, location details, company-specific terminology, and structural elements.',
     brandLine,
+    brandSection,
     'Improve flow and transitions while maintaining the existing organization.',
     contextLines.join('\n'),
     schemaHints.length ? `Schema context:\n${schemaHints.join('\n')}` : '',

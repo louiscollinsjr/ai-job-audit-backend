@@ -5,6 +5,7 @@ const { execSync } = require('child_process');
 const { supabase } = require('../utils/supabase');
 const { scoreJob7Category } = require('../services/scoringService');
 const { scoreJobEnhanced } = require('../services/scoringServiceV2');
+const { notifyJobScored } = require('../services/emailNotificationService');
 
 // Browser instance pooling for performance
 let browserInstance = null;
@@ -445,6 +446,10 @@ module.exports = async function(req, res) {
       } else {
         console.log('Report saved successfully with ID:', savedReport.id);
         reportId = savedReport.id;
+        
+        // Send email notification asynchronously (don't block response)
+        notifyJobScored(url, total_score, reportId, userId ? 'Authenticated User' : 'Guest')
+          .catch(err => console.error('Failed to send email notification:', err));
       }
     } catch (dbError) {
       console.error('Exception saving report to database:', dbError);
